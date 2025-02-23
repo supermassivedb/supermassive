@@ -45,6 +45,21 @@ OK key-value deleted
 GET key1
 ERR key-value not found
 
+-- Match keys with REGEX
+--- Match keys starting with prefix 'user_'
+REGX ^user_
+--- Match keys ending with a suffix '2024'
+REGX _2024$
+--- Contains 'session'
+REGX session
+--- Match keys with 'user' and '2024'
+REGX user.*2024
+--- Match keys with 'user' or '2024'
+REGX user|2024
+--- Range match keys between 'log_10', 'log_15'
+REGX log_(1[0-5])
+-- Results are returned KEY VALUE CRLF KEY VALUE CRLF...
+
 PUT key1 100
 OK key-value written
 
