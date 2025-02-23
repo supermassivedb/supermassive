@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"supermassive/journal"
 	"supermassive/network/server"
@@ -322,6 +323,62 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 				return
 			}
+
+		case strings.HasPrefix(string(command), "REGX"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// Check for optional offset and limit
+			// Can be REGX <pattern> <offset> <limit>
+			// or REGX <pattern>
+			var offset, limit int
+			if len(strings.Split(string(command), " ")) > 2 {
+				offset, _ = strconv.Atoi(strings.Split(string(command), " ")[2])
+				limit, _ = strconv.Atoi(strings.Split(string(command), " ")[3])
+			}
+
+			pattern := strings.Split(string(command), " ")[1]
+
+			var results [][]byte
+
+			// We acquire read lock
+			h.NodeReplica.Lock.RLock()
+			entries, err := h.NodeReplica.Storage.GetWithRegex(pattern, &offset, &limit)
+			if err != nil {
+				_, err = conn.Write([]byte(fmt.Sprintf("ERR %s\r\n", err.Error())))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					h.NodeReplica.Lock.RUnlock()
+					return
+				}
+				h.NodeReplica.Lock.RUnlock()
+				return
+			}
+
+			for i, entry := range entries {
+				if i == 0 {
+					results = append(results, []byte(fmt.Sprintf("OK %s %s %s\r\n", entry.Timestamp.Format(time.RFC3339), entry.Key, entry.Value)))
+				} else {
+					results = append(results, []byte(fmt.Sprintf("%s %s %s\r\n", entry.Timestamp.Format(time.RFC3339), entry.Key, entry.Value)))
+				}
+
+			}
+
+			// We release read lock
+			h.NodeReplica.Lock.RUnlock()
+			// We join all results into a single byte slice
+			_, err = conn.Write(bytes.Join(results, []byte("")))
+			if err != nil {
+				h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
+
 		case strings.HasPrefix(string(command), "PUT"):
 			if !authenticated {
 				_, err = conn.Write([]byte("ERR not authenticated\r\n"))

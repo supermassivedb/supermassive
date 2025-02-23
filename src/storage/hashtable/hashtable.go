@@ -30,6 +30,7 @@ package hashtable
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -337,4 +338,52 @@ func (ht *HashTable) Decr(key string, incrValue interface{}) (string, time.Time,
 		return fmt.Sprintf("%d", intValOriginal), ts, nil
 	}
 
+}
+
+// GetWithRegex returns all entries whose keys match the given regex pattern
+func (ht *HashTable) GetWithRegex(pattern string, limit, offset *int) ([]Entry, error) {
+	// Compile the regex pattern
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pre-allocate slice with a reasonable initial capacity
+	results := make([]Entry, 0, ht.used)
+
+	// Initialize counters
+	offsetCounter := 0
+	limitCounter := 0
+
+	// Iterate through all buckets
+	for _, entry := range ht.buckets {
+		// Skip empty buckets
+		if entry.Key == "" {
+			continue
+		}
+
+		// Check if the key matches the regex pattern
+		if re.MatchString(entry.Key) {
+			// Apply offset if provided
+			if offset != nil && offsetCounter < *offset {
+				offsetCounter++
+				continue
+			}
+
+			// Apply limit if provided
+			if limit != nil && limitCounter < *limit {
+				results = append(results, entry)
+				limitCounter++
+			} else if limit == nil {
+				results = append(results, entry)
+			}
+
+			// Break if limit is reached
+			if limit != nil && limitCounter == *limit {
+				break
+			}
+		}
+	}
+
+	return results, nil
 }

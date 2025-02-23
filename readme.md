@@ -58,7 +58,11 @@ REGX user.*2024
 REGX user|2024
 --- Range match keys between 'log_10', 'log_15'
 REGX log_(1[0-5])
--- Results are returned KEY VALUE CRLF KEY VALUE CRLF...
+-- Results are returned OK KEY VALUE CRLF KEY VALUE CRLF...
+
+-- You can offset and limit the results
+REGX user.*2024 0 10 -- Offset 0, Limit 10
+REGX user.*2024 10 10 -- Offset 10, Limit 10
 
 PUT key1 100
 OK key-value written
