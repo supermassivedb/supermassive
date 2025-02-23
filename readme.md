@@ -34,7 +34,7 @@ There is only 1 user for the system.  You set it, you can change the user creden
 It is advisable to call an environment variable to populate these flags or another method to keep the password secure.
 
 Starting either a cluster, node, or node replica you always also provide a `--shared-key` flag which is used to authentication cluster to node, node to node replica communication.
-All keys in the chain must match for communication to be successful.
+All keys in the chain must match for communication to be successful.  This should also be kept secure.
 
 ```bash
 (echo -n "AUTH " && echo -n $"username\\0password" | base64 && cat) | nc -C localhost 4000
