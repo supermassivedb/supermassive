@@ -70,7 +70,7 @@ type Node struct {
 	SharedKey          string               // Is the shared key for the node
 	Storage            *hashtable.HashTable // Is the storage for the node
 	Journal            *journal.Journal     // Is the journal for the node
-	Lock               *sync.RWMutex
+	Lock               *sync.RWMutex        // Is the lock for the node
 }
 
 // ReplicaConnection is the connection to a read replica
@@ -338,6 +338,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 		case strings.HasPrefix(string(command), "PUT"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We put the data
 			key := strings.Split(string(command), " ")[1]
 			value := strings.Join(strings.Split(string(command), " ")[2:], " ")
@@ -354,11 +363,11 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}()
 
-			// We relay to the read replicas
-			h.Node.relayToReplicas(string(command))
-
 			// We unlock the node
 			h.Node.Lock.Unlock()
+
+			// We relay to the read replicas
+			h.Node.relayToReplicas(string(command))
 
 			_, err = conn.Write([]byte("OK key-value written\r\n"))
 			if err != nil {
@@ -366,6 +375,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 		case strings.HasPrefix(string(command), "GET"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We get the data
 			key := strings.Split(string(command), " ")[1]
 
@@ -393,6 +411,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}
 		case strings.HasPrefix(string(command), "DEL"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We delete the data
 			key := strings.Split(string(command), " ")[1]
 
@@ -409,11 +436,11 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					}
 				}()
 
-				// We relay to the read replicas
-				h.Node.relayToReplicas(string(command))
-
 				// We release lock
 				h.Node.Lock.Unlock()
+
+				// We relay to the read replicas
+				h.Node.relayToReplicas(string(command))
 
 				_, err = conn.Write([]byte("OK key-value deleted\r\n"))
 				if err != nil {
@@ -432,6 +459,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}
 		case strings.HasPrefix(string(command), "INCR"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			key := strings.Split(string(command), " ")[1] // We get incrementing key
 
 			// We check if we have incrementing value
@@ -465,10 +501,10 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}()
 
+			h.Node.Lock.Unlock()
+
 			// We relay to the read replicas
 			h.Node.relayToReplicas(string(command))
-
-			h.Node.Lock.Unlock()
 
 			_, err = conn.Write([]byte(fmt.Sprintf("OK %s %s %s\r\n", ts.Format(time.RFC3339), key, val)))
 			if err != nil {
@@ -477,6 +513,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 		case strings.HasPrefix(string(command), "DECR"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			key := strings.Split(string(command), " ")[1] // We get decrementing key
 
 			// We check if we have a decrementing value
@@ -510,10 +555,10 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}()
 
+			h.Node.Lock.Unlock()
+
 			// We relay to the read replicas
 			h.Node.relayToReplicas(string(command))
-
-			h.Node.Lock.Unlock()
 
 			_, err = conn.Write([]byte(fmt.Sprintf("OK %s %s %s\r\n", ts.Format(time.RFC3339), key, val)))
 			if err != nil {

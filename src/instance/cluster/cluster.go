@@ -513,6 +513,14 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 		case strings.HasPrefix(string(command), "PUT"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
 
 			response, err := h.Cluster.WriteToNode(command)
 			if err != nil {
@@ -530,6 +538,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}
 		case strings.HasPrefix(string(command), "GET"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			response, err := h.Cluster.ParallelGet(command)
 			if err != nil {
 				_, err = conn.Write([]byte("ERR read error\r\n"))
@@ -545,6 +562,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 		case strings.HasPrefix(string(command), "INCR"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We write to all primary nodes in parallel
 			response, err := h.Cluster.ParallelIncrDecr(command)
 			if err != nil {
@@ -562,6 +588,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 		case strings.HasPrefix(string(command), "DECR"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We write to all primary nodes in parallel
 			response, err := h.Cluster.ParallelIncrDecr(command)
 			if err != nil {

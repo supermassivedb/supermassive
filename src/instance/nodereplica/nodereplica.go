@@ -40,6 +40,7 @@ import (
 	"supermassive/journal"
 	"supermassive/network/server"
 	"supermassive/storage/hashtable"
+	"sync"
 	"time"
 )
 
@@ -60,8 +61,9 @@ type NodeReplica struct {
 	Server    *server.Server       // Is the node replica server
 	Logger    *slog.Logger         // Is the logger for the node replica
 	SharedKey string               // Is the shared key for the node replica
-	Storage   *hashtable.HashTable // Is the storage for the node
-	Journal   *journal.Journal     // Is the journal for the node
+	Storage   *hashtable.HashTable // Is the storage for the node replica
+	Journal   *journal.Journal     // Is the journal for the node replica
+	Lock      *sync.RWMutex        // Is the lock for the node replica
 }
 
 // ServerConnectionHandler is the handler for the server connections
@@ -73,7 +75,7 @@ type ServerConnectionHandler struct {
 
 // New creates a new node replica instance
 func New(logger *slog.Logger, sharedKey string) *NodeReplica {
-	return &NodeReplica{Logger: logger, SharedKey: sharedKey}
+	return &NodeReplica{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}}
 }
 
 // Open opens a new node replica instance
@@ -277,16 +279,39 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 		case strings.HasPrefix(string(command), "STARTSYNC"):
 
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			h.NodeReplica.Lock.Lock()
+
 			// Because this is a replica we send over SYNCFROM PG <last journal page number>
 			// We know the connected should be a primary node
 			// The primary will now send us missing pages
 			_, err = conn.Write([]byte(fmt.Sprintf("SYNCFROM %d\r\n", h.NodeReplica.Journal.Pager.LastPage())))
 			if err != nil {
 				h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				h.NodeReplica.Lock.Unlock()
 				return
 			}
 
+			h.NodeReplica.Lock.Unlock()
+
 		case strings.HasPrefix(string(command), "DONESYNC"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We are done syncing with primary
 			// We log it
 			h.NodeReplica.Logger.Info("synced with primary", "remote_addr", conn.RemoteAddr())
@@ -298,16 +323,29 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 		case strings.HasPrefix(string(command), "PUT"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We put the data
 			key := strings.Split(string(command), " ")[1]
 			value := strings.Join(strings.Split(string(command), " ")[2:], " ")
 
+			h.NodeReplica.Lock.Lock()
 			h.NodeReplica.Storage.Put(key, value)
+			h.NodeReplica.Lock.Unlock()
 
-			err := h.NodeReplica.Journal.Append(key, value, journal.PUT)
-			if err != nil {
-				h.NodeReplica.Logger.Warn("journal append error", "error", err)
-			}
+			go func() {
+				err := h.NodeReplica.Journal.Append(key, value, journal.PUT)
+				if err != nil {
+					h.NodeReplica.Logger.Warn("journal append error", "error", err)
+				}
+			}()
 
 			_, err = conn.Write([]byte("OK key-value written\r\n"))
 			if err != nil {
@@ -315,10 +353,20 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 		case strings.HasPrefix(string(command), "GET"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We get the data
 			key := strings.Split(string(command), " ")[1]
-
+			h.NodeReplica.Lock.RLock()
 			value, ts, ok := h.NodeReplica.Storage.Get(key)
+			h.NodeReplica.Lock.RUnlock()
 
 			if ok {
 				// Format time in RFC3339
@@ -336,17 +384,30 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}
 		case strings.HasPrefix(string(command), "DEL"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We delete the data
 			key := strings.Split(string(command), " ")[1]
 
+			h.NodeReplica.Lock.Lock()
 			ok := h.NodeReplica.Storage.Delete(key)
+			h.NodeReplica.Lock.Unlock()
 
 			if ok {
 
-				err := h.NodeReplica.Journal.Append(key, "", journal.DEL)
-				if err != nil {
-					h.NodeReplica.Logger.Warn("journal append error", "error", err)
-				}
+				go func() {
+					err := h.NodeReplica.Journal.Append(key, "", journal.DEL)
+					if err != nil {
+						h.NodeReplica.Logger.Warn("journal append error", "error", err)
+					}
+				}()
 
 				_, err = conn.Write([]byte("OK key-value deleted\r\n"))
 				if err != nil {
@@ -361,6 +422,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}
 		case strings.HasPrefix(string(command), "INCR"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			key := strings.Split(string(command), " ")[1] // We get incrementing key
 
 			// We check if we have incrementing value
@@ -372,21 +442,27 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 				return
 			}
-
+			h.NodeReplica.Lock.Lock()
 			val, ts, err := h.NodeReplica.Storage.Incr(key, strings.Split(string(command), " ")[2])
 			if err != nil {
 				_, err := conn.Write([]byte(fmt.Sprintf("ERR %s\r\n", err.Error())))
 				if err != nil {
 					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					h.NodeReplica.Lock.Unlock()
 					return
 				}
+				h.NodeReplica.Lock.Unlock()
 				return
 			}
 
-			err = h.NodeReplica.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
-			if err != nil {
-				h.NodeReplica.Logger.Warn("journal append error", "error", err)
-			}
+			h.NodeReplica.Lock.Unlock()
+
+			go func() {
+				err = h.NodeReplica.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
+				if err != nil {
+					h.NodeReplica.Logger.Warn("journal append error", "error", err)
+				}
+			}()
 
 			_, err = conn.Write([]byte(fmt.Sprintf("OK %s %s %s\r\n", ts.Format(time.RFC3339), key, val)))
 			if err != nil {
@@ -395,6 +471,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 		case strings.HasPrefix(string(command), "DECR"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			key := strings.Split(string(command), " ")[1] // We get decrementing key
 
 			// We check if we have a decrementing value
@@ -407,15 +492,21 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 
+			h.NodeReplica.Lock.Lock()
+
 			val, ts, err := h.NodeReplica.Storage.Decr(key, strings.Split(string(command), " ")[2])
 			if err != nil {
 				_, err := conn.Write([]byte(fmt.Sprintf("ERR %s\r\n", err.Error())))
 				if err != nil {
 					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					h.NodeReplica.Lock.Unlock()
 					return
 				}
+				h.NodeReplica.Lock.Unlock()
 				return
 			}
+
+			h.NodeReplica.Lock.Unlock()
 
 			err = h.NodeReplica.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
 			if err != nil {
