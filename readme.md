@@ -1,10 +1,12 @@
 # SUPERMASSIVE
+
 SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tolerant, and self-healing key-value database.
 
 > [!IMPORTANT]
 > SuperMassive is in active development and is not ready for production use.
 
 ## Features
+
 - **Highly scalable** Scale horizontally with ease.
 - **Distributed** Data is distributed across multiple nodes.
 - **Sharded** Data is sharded across multiple nodes.
@@ -20,24 +22,101 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - **Async Journal Write** Journal writes are done asynchronously.
 - **Multi-platform** Linux, Windows, MacOS
 
-## Todo
-- [ ] Cluster unit and integration tests
-- [ ] Node unit and integration tests
-- [ ] Replica unit and integration tests
+## Getting Started
 
-## Example
-
-You can use TLS for your client-cluster communcation and cluster-node node-replica communication.  A cluster can be started with TLS and so can other instance types based on configuration files.
+You can use TLS for your client-cluster communication and cluster-node node-replica communication.  A cluster can be started with TLS and so can other instance types based on configuration files.
 
 When starting a cluster instance you provide a `--username` and `--password`.  When accessing through a client like netcat you now need to authenticate with `AUTH user\0password`.
 
 The `user\0password` should be encoded in base64.
+
 ```bash
 (echo -n "AUTH " && echo -n $"username\\0password" | base64 && cat) | nc -C localhost 4000
 OK authenticated
 ```
 
 `-C` is used for CRLF line endings.  This is required for the protocol.
+
+A cluster requires nodes to write to.  By default `.cluster`, `.node`, `.nodereplica` yaml configs are created.
+These configurations give you an example of how a cluster is setup with 1 node and 1 replica.
+
+### Configurations
+
+**Cluster**
+
+```yaml
+health-check-interval: 2
+server-config:
+    address: localhost:4000
+    use-tls: false
+    cert-file: /
+    key-file: /
+    read-timeout: 10
+    buffer-size: 1024
+node-configs:
+    - node:
+        server-address: localhost:4001
+        use-tls: false
+        ca-cert-file: ""
+        connect-timeout: 5
+        write-timeout: 5
+        read-timeout: 5
+        max-retries: 3
+        retry-wait-time: 1
+        buffer-size: 1024
+      replicas:
+        - server-address: localhost:4002
+          use-tls: false
+          ca-cert-file: ""
+          connect-timeout: 5
+          write-timeout: 5
+          read-timeout: 5
+          max-retries: 3
+          retry-wait-time: 1
+          buffer-size: 1024
+
+```
+You can add more nodes and replicas to the cluster by adding more `node-configs`.
+A `node` acts as a primary shard and a `replica` acts as a read replica to the primary shard.
+
+**Node**
+
+```yaml
+health-check-interval: 2
+server-config:
+    address: localhost:4001
+    use-tls: false
+    cert-file: /
+    key-file: /
+    read-timeout: 10
+    buffer-size: 1024
+read-replicas:
+    - server-address: localhost:4002
+      use-tls: false
+      ca-cert-file: /
+      connect-timeout: 5
+      write-timeout: 5
+      read-timeout: 5
+      max-retries: 3
+      retry-wait-time: 1
+      buffer-size: 1024
+
+```
+
+**Node Replica**
+
+```yaml
+server-config:
+    address: localhost:4002
+    use-tls: false
+    cert-file: /
+    key-file: /
+    read-timeout: 10
+    buffer-size: 1024
+
+```
+
+### Examples
 
 ```bash
 PUT key1 value1
@@ -96,23 +175,22 @@ DECR key2 1.1
 key2 1.5
 ```
 
-There are NO transactions.  All commands except PUT, PING are ran in parallel.  PUT selects 1 node based on current sequence and writes to it.
-On get, we always return the most recent value of a key.  If there are multiple values for a key only 1 value lives on if this occurs, rest are deleted.
+> [!NOTE]
+> There are NO transactions.  All commands except PUT, PING are ran in parallel.  PUT selects 1 node based on current sequence and writes to it.  On get, we always return the most recent value of a key.  If there are multiple values for a key only 1 value lives on if this occurs, rest are deleted.
 
 
 ## Replica consistency?
+
 When a replica is down, the primary node will not be able to write to it.  The primary node will continue to write to the other replicas.
 When the replica comes back up, the primary node will send the missing data to the replica.  The replica will then be in sync with the primary node.
 
 This is using the journal pages and a specific piece of the protocol
 A primary after connected to replica will send a `STARTSYNC`, a replica will then send a `SYNCFROM pgnum` where pgnum is the last page number in the replica journal.  The primary will then send missing operations to the replica.
 
-Communication looks like this
-```
--- Replica goes online
--- Replica sends `SYNCFROM pgnum` to primary
--- Primary starts sending pages to replica until it reaches end of its journal
--- Replica writes pages to its journal
--- PRIMARY is done sending pages to replica once `SYNCDONE` is sent to replica
--- Primary and replica are now in sync
-```
+**Communication looks like this**
+1. Replica goes online
+2. Replica sends `SYNCFROM pgnum` to primary
+3. Primary starts sending pages to replica until it reaches end of its journal
+4. Replica writes pages to its journal
+5. PRIMARY is done sending pages to replica once `SYNCDONE` is sent to replica
+6. Primary and replica are now in sync
