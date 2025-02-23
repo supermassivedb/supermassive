@@ -78,7 +78,12 @@ func main() {
 			os.Exit(1)
 		}
 
-		c := cluster.New(logger, *sharedKeyFlag, *usernameFlag, *passwordFlag)
+		c, err := cluster.New(logger, *sharedKeyFlag, *usernameFlag, *passwordFlag)
+		if err != nil {
+			logger.Error("Error creating cluster instance", err)
+			os.Exit(1)
+		}
+
 		go func() {
 			err := c.Open()
 			if err != nil {
@@ -89,7 +94,7 @@ func main() {
 
 		<-sig
 		logger.Info("Shutting down cluster instance")
-		err := c.Close()
+		err = c.Close()
 		if err != nil {
 			logger.Error("Error shutting down cluster instance", err)
 			return

@@ -101,8 +101,24 @@ type ServerConnectionHandler struct {
 }
 
 // New creates a new cluster instance
-func New(logger *slog.Logger, sharedKey, username, password string) *Cluster {
-	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password}
+func New(logger *slog.Logger, sharedKey, username, password string) (*Cluster, error) {
+	if sharedKey == "" {
+		return nil, fmt.Errorf("shared key is required")
+	}
+
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+
+	if password == "" {
+		return nil, fmt.Errorf("password is required")
+	}
+
+	if logger == nil {
+		return nil, fmt.Errorf("logger is required")
+	}
+
+	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password, Sequence: atomic.Int32{}}, nil
 }
 
 // Open opens a new cluster instance
