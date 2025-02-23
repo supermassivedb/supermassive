@@ -1075,3 +1075,17 @@ func TestServerConfigRefresh(t *testing.T) {
 
 	nr.Close()
 }
+
+// We create a primary and 2 replicas.  Configure the primary for the 2 replicas..
+// We open the primary, we open the replicas.. We write commands to the primary and we expect the replicas to have the same data.
+func TestServerRelayToReplicas(t *testing.T) {
+
+}
+
+// We create a primary and 1 replica.  We configure the primary for the 1 replica.
+// We write a few commands to the primary and we expect the replica to have the same data,
+// then we close the replica, and continue to write commands to primary.  After we turn on the replica, we expect the replica to have the same data
+// after sync.
+func TestServerReplicaSync(t *testing.T) {
+
+}
