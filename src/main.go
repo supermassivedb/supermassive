@@ -103,7 +103,12 @@ func main() {
 	case "node":
 		logger.Info("Starting node instance")
 
-		n := node.New(logger, *sharedKeyFlag)
+		n, err := node.New(logger, *sharedKeyFlag)
+		if err != nil {
+			logger.Error("Error creating node instance", err)
+			os.Exit(1)
+		}
+
 		go func() {
 			err := n.Open()
 			if err != nil {
@@ -114,7 +119,7 @@ func main() {
 
 		<-sig
 		logger.Info("Shutting down node instance")
-		err := n.Close()
+		err = n.Close()
 		if err != nil {
 			logger.Error("Error shutting down node instance", err)
 			return
@@ -122,7 +127,12 @@ func main() {
 	case "node-replica":
 		logger.Info("Starting node replica instance")
 
-		nr := nodereplica.New(logger, *sharedKeyFlag)
+		nr, err := nodereplica.New(logger, *sharedKeyFlag)
+		if err != nil {
+			logger.Error("Error creating node replica instance", err)
+			os.Exit(1)
+		}
+
 		go func() {
 			err := nr.Open()
 			if err != nil {
@@ -133,7 +143,7 @@ func main() {
 
 		<-sig
 		logger.Info("Shutting down node replica instance")
-		err := nr.Close()
+		err = nr.Close()
 		if err != nil {
 			logger.Error("Error shutting down node replica instance", err)
 			return

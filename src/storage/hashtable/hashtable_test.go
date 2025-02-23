@@ -30,6 +30,7 @@ package hashtable
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"testing"
 )
@@ -212,6 +213,222 @@ func TestResizeShrink(t *testing.T) {
 			t.Errorf("Expected %d, got %v", i, val)
 		}
 	}
+}
+
+func TestGetWithRegex(t *testing.T) {
+	ht := New()
+
+	// Setup test data
+	testData := map[string]string{
+		"user:1":     "John",
+		"user:2":     "Jane",
+		"user:3":     "Bob",
+		"product:1":  "Laptop",
+		"product:2":  "Phone",
+		"settings:1": "Dark Mode",
+	}
+
+	for k, v := range testData {
+		ht.Put(k, v)
+	}
+
+	tests := []struct {
+		name          string
+		pattern       string
+		limit         *int
+		offset        *int
+		expectedLen   int
+		expectedError bool
+	}{
+		{
+			name:          "Match all users",
+			pattern:       "^user:\\d+$",
+			limit:         nil,
+			offset:        nil,
+			expectedLen:   3,
+			expectedError: false,
+		},
+		{
+			name:          "Match all products with limit",
+			pattern:       "^product:",
+			limit:         &[]int{1}[0],
+			offset:        nil,
+			expectedLen:   1,
+			expectedError: false,
+		},
+		{
+			name:          "Match with offset",
+			pattern:       "^user:",
+			limit:         nil,
+			offset:        &[]int{1}[0],
+			expectedLen:   2,
+			expectedError: false,
+		},
+		{
+			name:          "Match with limit and offset",
+			pattern:       "^user:",
+			limit:         &[]int{1}[0],
+			offset:        &[]int{1}[0],
+			expectedLen:   1,
+			expectedError: false,
+		},
+		{
+			name:          "Invalid regex pattern",
+			pattern:       "[",
+			limit:         nil,
+			offset:        nil,
+			expectedLen:   0,
+			expectedError: true,
+		},
+		{
+			name:          "No matches",
+			pattern:       "^nonexistent:",
+			limit:         nil,
+			offset:        nil,
+			expectedLen:   0,
+			expectedError: false,
+		},
+		{
+			name:          "Match all with zero limit",
+			pattern:       "^user:",
+			limit:         &[]int{0}[0],
+			offset:        nil,
+			expectedLen:   0,
+			expectedError: false,
+		},
+		{
+			name:          "Match all with large offset",
+			pattern:       "^user:",
+			limit:         nil,
+			offset:        &[]int{10}[0],
+			expectedLen:   0,
+			expectedError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			results, err := ht.GetWithRegex(tt.pattern, tt.limit, tt.offset)
+
+			// Check error status
+			if tt.expectedError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+
+			// Check results length
+			if err == nil && len(results) != tt.expectedLen {
+				t.Errorf("Expected %d results, got %d", tt.expectedLen, len(results))
+			}
+
+			// Additional checks for specific test cases
+			if tt.name == "Match all users" && err == nil {
+				for _, entry := range results {
+					if matched, _ := regexp.MatchString("^user:\\d+$", entry.Key); !matched {
+						t.Errorf("Unexpected key format: %s", entry.Key)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGetWithRegexEdgeCases(t *testing.T) {
+	ht := New()
+
+	// Test empty hash table
+	results, err := ht.GetWithRegex(".*", nil, nil)
+	if err != nil {
+		t.Errorf("Unexpected error on empty hash table: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results from empty hash table, got %d", len(results))
+	}
+
+	// Test with special regex characters in keys
+	specialKeys := map[string]string{
+		"test.key":     "value1",
+		"test*key":     "value2",
+		"test[key]":    "value3",
+		"test{1,2}key": "value4",
+	}
+
+	for k, v := range specialKeys {
+		ht.Put(k, v)
+	}
+
+	// Test exact matches with escaped special characters
+	for k := range specialKeys {
+		pattern := regexp.QuoteMeta(k)
+		results, err := ht.GetWithRegex(pattern, nil, nil)
+		if err != nil {
+			t.Errorf("Unexpected error matching special key %s: %v", k, err)
+		}
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for key %s, got %d", k, len(results))
+		}
+	}
+
+	// Test with very large limit
+	largeLimit := 1000
+	results, err = ht.GetWithRegex(".*", &largeLimit, nil)
+	if err != nil {
+		t.Errorf("Unexpected error with large limit: %v", err)
+	}
+	if len(results) != len(specialKeys) {
+		t.Errorf("Expected %d results with large limit, got %d", len(specialKeys), len(results))
+	}
+
+	// Test with negative limit and offset
+	negativeValue := -1
+	_, err = ht.GetWithRegex(".*", &negativeValue, nil)
+	if err != nil {
+		t.Errorf("Unexpected error with negative limit: %v", err)
+	}
+	_, err = ht.GetWithRegex(".*", nil, &negativeValue)
+	if err != nil {
+		t.Errorf("Unexpected error with negative offset: %v", err)
+	}
+}
+
+func BenchmarkGetWithRegex(b *testing.B) {
+	ht := New()
+
+	// Setup test data
+	for i := 0; i < 1000; i++ {
+		key := fmt.Sprintf("user:%d", i)
+		ht.Put(key, fmt.Sprintf("value%d", i))
+	}
+
+	b.ResetTimer()
+
+	b.Run("Simple Pattern", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			ht.GetWithRegex("^user:[0-9]+$", nil, nil)
+		}
+	})
+
+	b.Run("With Limit", func(b *testing.B) {
+		limit := 10
+		for i := 0; i < b.N; i++ {
+			ht.GetWithRegex("^user:", &limit, nil)
+		}
+	})
+
+	b.Run("With Offset", func(b *testing.B) {
+		offset := 500
+		for i := 0; i < b.N; i++ {
+			ht.GetWithRegex("^user:", nil, &offset)
+		}
+	})
+
+	b.Run("Complex Pattern", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			ht.GetWithRegex("^user:([0-9]|[1-9][0-9]|[1-9][0-9][0-9])$", nil, nil)
+		}
+	})
 }
 
 func BenchmarkHashTable_Put(b *testing.B) {

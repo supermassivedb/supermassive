@@ -31,6 +31,7 @@ package nodereplica
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"log/slog"
@@ -75,8 +76,16 @@ type ServerConnectionHandler struct {
 }
 
 // New creates a new node replica instance
-func New(logger *slog.Logger, sharedKey string) *NodeReplica {
-	return &NodeReplica{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}}
+func New(logger *slog.Logger, sharedKey string) (*NodeReplica, error) {
+	if logger == nil {
+		return nil, errors.New("logger is required")
+	}
+
+	if sharedKey == "" {
+		return nil, errors.New("shared key is required")
+	}
+
+	return &NodeReplica{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}}, nil
 }
 
 // Open opens a new node replica instance
