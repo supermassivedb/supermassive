@@ -30,8 +30,11 @@ package cluster
 
 import (
 	"context"
+	"gopkg.in/yaml.v3"
+	"io/ioutil"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"supermassive/network/client"
 	"supermassive/network/server"
 	"testing"
@@ -182,4 +185,106 @@ func TestCluster_Open(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenExistingConfigFile(t *testing.T) {
+	// Create a temporary directory
+	tempDir, err := ioutil.TempDir("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a temporary config file
+	configFilePath := filepath.Join(tempDir, ConfigFile)
+	configData := &Config{
+		HealthCheckInterval: 2,
+		ServerConfig: &server.Config{
+			Address:     "localhost:4000",
+			UseTLS:      false,
+			CertFile:    "/",
+			KeyFile:     "/",
+			ReadTimeout: 10,
+			BufferSize:  1024,
+		},
+		NodeConfigs: []*NodeConfig{
+			{
+				Node: &client.Config{
+					ServerAddress:  "localhost:4001",
+					UseTLS:         false,
+					ConnectTimeout: 5,
+					WriteTimeout:   5,
+					ReadTimeout:    5,
+					MaxRetries:     3,
+					RetryWaitTime:  1,
+					BufferSize:     1024,
+				},
+				Replicas: []*client.Config{
+					{
+						ServerAddress:  "localhost:4002",
+						UseTLS:         false,
+						ConnectTimeout: 5,
+						WriteTimeout:   5,
+						ReadTimeout:    5,
+						MaxRetries:     3,
+						RetryWaitTime:  1,
+						BufferSize:     1024,
+					},
+				},
+			},
+		},
+	}
+
+	data, err := yaml.Marshal(configData)
+	if err != nil {
+		t.Fatalf("Failed to marshal config data: %v", err)
+	}
+
+	err = ioutil.WriteFile(configFilePath, data, 0644)
+	if err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	// Test the function
+	config, err := openExistingConfigFile(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to open existing config file: %v", err)
+	}
+
+	// Validate the config data
+	if config.HealthCheckInterval != configData.HealthCheckInterval {
+		t.Errorf("Expected HealthCheckInterval %d, got %d", configData.HealthCheckInterval, config.HealthCheckInterval)
+	}
+
+	if config.ServerConfig.Address != configData.ServerConfig.Address {
+		t.Errorf("Expected ServerConfig.Address %s, got %s", configData.ServerConfig.Address, config.ServerConfig.Address)
+	}
+
+	if len(config.NodeConfigs) != len(configData.NodeConfigs) {
+		t.Errorf("Expected %d NodeConfigs, got %d", len(configData.NodeConfigs), len(config.NodeConfigs))
+	}
+
+	if config.NodeConfigs[0].Node.ServerAddress != configData.NodeConfigs[0].Node.ServerAddress {
+		t.Errorf("Expected Node.ServerAddress %s, got %s", configData.NodeConfigs[0].Node.ServerAddress, config.NodeConfigs[0].Node.ServerAddress)
+	}
+
+	if len(config.NodeConfigs[0].Replicas) != len(configData.NodeConfigs[0].Replicas) {
+		t.Errorf("Expected %d Replicas, got %d", len(configData.NodeConfigs[0].Replicas), len(config.NodeConfigs[0].Replicas))
+	}
+
+	if config.NodeConfigs[0].Replicas[0].ServerAddress != configData.NodeConfigs[0].Replicas[0].ServerAddress {
+		t.Errorf("Expected Replica.ServerAddress %s, got %s", configData.NodeConfigs[0].Replicas[0].ServerAddress, config.NodeConfigs[0].Replicas[0].ServerAddress)
+	}
+}
+
+func TestCreateDefaultConfigFile(t *testing.T) {
+	// Create a temporary directory
+	tempDir := t.TempDir()
+
+	// Call the createDefaultConfigFile function
+	_, err := createDefaultConfigFile(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create default config file: %v", err)
+	}
+
 }

@@ -30,8 +30,11 @@ package nodereplica
 
 import (
 	"context"
+	"gopkg.in/yaml.v3"
+	"io/ioutil"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"supermassive/network/server"
 	"testing"
 	"time"
@@ -146,4 +149,79 @@ func TestNodeReplica_Open(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenExistingConfigFile(t *testing.T) {
+	// Create a temporary directory
+	tempDir, err := ioutil.TempDir("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a temporary config file
+	configFilePath := filepath.Join(tempDir, ConfigFile)
+	configData := &Config{
+		ServerConfig: &server.Config{
+			Address:     "localhost:4002",
+			UseTLS:      false,
+			CertFile:    "/",
+			KeyFile:     "/",
+			ReadTimeout: 10,
+			BufferSize:  1024,
+		},
+	}
+
+	data, err := yaml.Marshal(configData)
+	if err != nil {
+		t.Fatalf("Failed to marshal config data: %v", err)
+	}
+
+	err = ioutil.WriteFile(configFilePath, data, 0644)
+	if err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	// Test the function
+	config, err := openExistingConfigFile(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to open existing config file: %v", err)
+	}
+
+	// Validate the config data
+	if config.ServerConfig.Address != configData.ServerConfig.Address {
+		t.Errorf("Expected ServerConfig.Address %s, got %s", configData.ServerConfig.Address, config.ServerConfig.Address)
+	}
+
+	if config.ServerConfig.UseTLS != configData.ServerConfig.UseTLS {
+		t.Errorf("Expected ServerConfig.UseTLS %v, got %v", configData.ServerConfig.UseTLS, config.ServerConfig.UseTLS)
+	}
+
+	if config.ServerConfig.CertFile != configData.ServerConfig.CertFile {
+		t.Errorf("Expected ServerConfig.CertFile %s, got %s", configData.ServerConfig.CertFile, config.ServerConfig.CertFile)
+	}
+
+	if config.ServerConfig.KeyFile != configData.ServerConfig.KeyFile {
+		t.Errorf("Expected ServerConfig.KeyFile %s, got %s", configData.ServerConfig.KeyFile, config.ServerConfig.KeyFile)
+	}
+
+	if config.ServerConfig.ReadTimeout != configData.ServerConfig.ReadTimeout {
+		t.Errorf("Expected ServerConfig.ReadTimeout %d, got %d", configData.ServerConfig.ReadTimeout, config.ServerConfig.ReadTimeout)
+	}
+
+	if config.ServerConfig.BufferSize != configData.ServerConfig.BufferSize {
+		t.Errorf("Expected ServerConfig.BufferSize %d, got %d", configData.ServerConfig.BufferSize, config.ServerConfig.BufferSize)
+	}
+}
+
+func TestCreateDefaultConfigFile(t *testing.T) {
+	// Create a temporary directory
+	tempDir := t.TempDir()
+
+	// Call the createDefaultConfigFile function
+	_, err := createDefaultConfigFile(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create default config file: %v", err)
+	}
+
 }
