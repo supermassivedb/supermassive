@@ -577,6 +577,30 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 				return
 			}
+		case strings.HasPrefix(string(command), "REGX"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			response, err := h.Cluster.ParallelRegx(command)
+			if err != nil {
+				_, err = conn.Write([]byte("ERR read error\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+			}
+
+			_, err = conn.Write(response)
+			if err != nil {
+				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
 		case strings.HasPrefix(string(command), "INCR"):
 			if !authenticated {
 				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
@@ -934,6 +958,244 @@ func (c *Cluster) ParallelGet(command []byte) ([]byte, error) {
 	}
 
 	return response.Data, nil
+}
+
+// ParallelRegx reads from all replicas in parallel using REGX command
+// replaces duplicate keys comparing timestamps
+func (c *Cluster) ParallelRegx(command []byte) ([]byte, error) {
+	// We try to get from primary if not avail we try replica to command
+	var response []*struct {
+		TimeStamp time.Time
+		Key       []byte
+		Data      []byte
+		Node      *NodeConnection
+	}
+
+	wg := sync.WaitGroup{}
+	lock := sync.Mutex{}
+
+	for _, nodeConn := range c.NodeConnections {
+
+		if !nodeConn.Health {
+			// We check replica if primary is down
+			for _, replicaConn := range nodeConn.Replicas {
+				if !replicaConn.Health {
+					continue
+				}
+
+				wg.Add(1)
+				go func(nodeConn *NodeConnection, replicaConn *ReplicaConnection) {
+					defer wg.Done()
+
+					// We send the command
+					err := replicaConn.Client.Send(replicaConn.Context, command)
+					if err != nil {
+						c.Logger.Warn("write error", "error", err)
+						return
+					}
+
+					// We receive the response
+					rec, err := replicaConn.Client.Receive(replicaConn.Context)
+					if err != nil {
+						c.Logger.Warn("read error", "error", err)
+						return
+					}
+
+					// If OK
+					if bytes.HasPrefix(rec, []byte("OK")) {
+
+						// We split by CRLF
+						results := bytes.Split(rec, []byte("\r\n"))
+						for i, result := range results {
+							var timestampBytes []byte
+							var data []byte
+
+							responseInner := &struct {
+								TimeStamp time.Time
+								Key       []byte
+								Data      []byte
+								Node      *NodeConnection
+							}{}
+
+							// We parse the received response
+							if i == 0 {
+								timestampBytes = bytes.Split(result, []byte(" "))[1]
+								data = bytes.Join(bytes.Split(result, []byte(" "))[2:], []byte(" "))
+								responseInner.Key = bytes.Split(result, []byte(" "))[2]
+							} else {
+								timestampBytes = bytes.Split(result, []byte(" "))[0]
+								data = bytes.Join(bytes.Split(result, []byte(" "))[1:], []byte(" "))
+								responseInner.Key = bytes.Split(result, []byte(" "))[1]
+							}
+
+							responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestampBytes))
+							if err != nil {
+								c.Logger.Warn("time parse error", "error", err)
+								return
+							}
+
+							responseInner.Data = data
+							responseInner.Node = nodeConn
+
+							if response != nil {
+								// We check the response results for the key, if its there we compare
+								for j, res := range response {
+									if bytes.Equal(res.Key, responseInner.Key) {
+										// We compare the timestamps
+										if res.TimeStamp.After(responseInner.TimeStamp) {
+											// We send a delete command to the primary node
+
+											key := responseInner.Key
+
+											err = responseInner.Node.Client.Send(responseInner.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
+											if err != nil {
+												c.Logger.Warn("write error", "error", err)
+												return
+											}
+
+											// We get response from node assure it's ok log it
+											nodeResponse, err := responseInner.Node.Client.Receive(responseInner.Node.Context)
+											if err != nil {
+												c.Logger.Warn("read error", "error", err)
+												return
+											}
+
+											if string(nodeResponse) != "OK key-value deleted\r\n" {
+												c.Logger.Warn("delete error", "error", err)
+												return
+											}
+											c.Logger.Info("key deleted", "key", string(key))
+
+											// We replace the response
+											lock.Lock()
+
+											response[j] = responseInner
+											lock.Unlock()
+										}
+									}
+								}
+
+							}
+						}
+
+					}
+				}(nodeConn, replicaConn)
+
+			}
+			continue
+		} else {
+			wg.Add(1)
+			go func(nodeConn *NodeConnection) {
+				defer wg.Done()
+
+				// We send the command
+				err := nodeConn.Client.Send(nodeConn.Context, command)
+				if err != nil {
+					c.Logger.Warn("write error", "error", err)
+					return
+				}
+
+				// We receive the response
+				rec, err := nodeConn.Client.Receive(nodeConn.Context)
+				if err != nil {
+					c.Logger.Warn("read error", "error", err)
+					return
+				}
+
+				// If OK we parse the response
+				if bytes.HasPrefix(rec, []byte("OK")) {
+
+					// We split by CRLF
+					results := bytes.Split(rec, []byte("\r\n"))
+					for i, result := range results {
+						var timestampBytes []byte
+						var data []byte
+
+						responseInner := &struct {
+							TimeStamp time.Time
+							Key       []byte
+							Data      []byte
+							Node      *NodeConnection
+						}{}
+
+						// We parse the received response
+						if i == 0 {
+							timestampBytes = bytes.Split(result, []byte(" "))[1]
+							data = bytes.Join(bytes.Split(result, []byte(" "))[2:], []byte(" "))
+							responseInner.Key = bytes.Split(result, []byte(" "))[2]
+						} else {
+							timestampBytes = bytes.Split(result, []byte(" "))[0]
+							data = bytes.Join(bytes.Split(result, []byte(" "))[1:], []byte(" "))
+							responseInner.Key = bytes.Split(result, []byte(" "))[1]
+						}
+
+						responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestampBytes))
+						if err != nil {
+							c.Logger.Warn("time parse error", "error", err)
+							return
+						}
+
+						responseInner.Data = data
+						responseInner.Node = nodeConn
+
+						if response != nil {
+							// We check the response results for the key, if its there we compare
+							for j, res := range response {
+								if bytes.Equal(res.Key, responseInner.Key) {
+									// We compare the timestamps
+									if res.TimeStamp.After(responseInner.TimeStamp) {
+										// We send a delete command to the primary node
+
+										key := responseInner.Key
+
+										err = responseInner.Node.Client.Send(responseInner.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
+										if err != nil {
+											c.Logger.Warn("write error", "error", err)
+											return
+										}
+
+										// We get response from node assure it's ok log it
+										nodeResponse, err := responseInner.Node.Client.Receive(responseInner.Node.Context)
+										if err != nil {
+											c.Logger.Warn("read error", "error", err)
+											return
+										}
+
+										if string(nodeResponse) != "OK key-value deleted\r\n" {
+											c.Logger.Warn("delete error", "error", err)
+											return
+										}
+										c.Logger.Info("key deleted", "key", string(key))
+
+										// We replace the response
+										lock.Lock()
+
+										response[j] = responseInner
+										lock.Unlock()
+									}
+								}
+							}
+
+						}
+					}
+
+				}
+			}(nodeConn)
+		}
+	}
+
+	wg.Wait()
+
+	if response == nil {
+		return []byte("ERR no keys found\r\n"), nil
+	}
+
+	results := []byte("OK ")
+	for _, res := range response {
+		results = append(results, []byte(fmt.Sprintf("%s %s\r\n", res.Key, res.Data))...)
+	}
+
+	return results, nil
 }
 
 // WriteToNode writes to a primary node in sequence
