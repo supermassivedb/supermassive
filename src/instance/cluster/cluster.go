@@ -683,7 +683,7 @@ func (c *Cluster) Stats() []byte {
 	// We send a stat command to all nodes and form a response
 
 	for _, nodeConn := range c.NodeConnections {
-		response = append(response, fmt.Sprintf("NODE %s\r\n", nodeConn.Config.Node.ServerAddress)...)
+		response = append(response, fmt.Sprintf("PRIMARY %s\r\n", nodeConn.Config.Node.ServerAddress)...)
 		if nodeConn.Health {
 			// We send the command
 			err := nodeConn.Client.Send(nodeConn.Context, []byte("STAT\r\n"))

@@ -189,7 +189,7 @@ key2 1.5
 
 STAT -- get stats on all nodes in the cluster
 OK
-NODE localhost:4001 -- get stats on a specific node
+PRIMARY localhost:4001 -- get stats on a specific node
 DISK
     sync_enabled true
     sync_interval 128ms
