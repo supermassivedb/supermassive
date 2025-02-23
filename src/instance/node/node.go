@@ -301,6 +301,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	for {
 
 		_ = conn.SetReadDeadline(time.Time{})
+
 		n, err := conn.Read(buffer)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -753,6 +754,7 @@ func (n *Node) backgroundHealthChecks() {
 					}
 					if replicaConn.Client == nil {
 						replicaConn.Client = client.New(replicaConn.Client.Config, n.Logger)
+
 					}
 
 					if err := replicaConn.Client.Connect(replicaConn.Context); err != nil {

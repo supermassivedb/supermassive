@@ -251,6 +251,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	for {
 
 		_ = conn.SetReadDeadline(time.Time{})
+
 		n, err := conn.Read(buffer)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -302,6 +303,8 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 						h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 						return
 					}
+
+					return // We close the connection
 				}
 			} else {
 				_, err = conn.Write([]byte("ERR already authenticated\r\n"))

@@ -1080,7 +1080,6 @@ func TestServerConfigRefresh(t *testing.T) {
 // We create a primary and 1 replicas.  Configure the primary for the 1 replica..
 // We open the primary, we open the replica.. We write commands to the primary and we expect the replicas to have the same data.
 func TestServerRelayToReplicas(t *testing.T) {
-
 	var replica *nodereplica.NodeReplica
 	var replica2 *nodereplica.NodeReplica
 
@@ -1100,7 +1099,7 @@ func TestServerRelayToReplicas(t *testing.T) {
 
 		replica.Config = &nodereplica.Config{
 			ServerConfig: &server.Config{
-				Address:     "localhost:4002",
+				Address:     "localhost:4004",
 				UseTLS:      false,
 				ReadTimeout: 10,
 				BufferSize:  1024,
@@ -1109,6 +1108,19 @@ func TestServerRelayToReplicas(t *testing.T) {
 		}
 
 		dir := ".replica_test/"
+
+		// Marhsal config into .replica_test/
+		yamlRaw, err := yaml.Marshal(replica.Config)
+		if err != nil {
+			t.Errorf("Failed to marshal config: %v", err)
+			return
+		}
+
+		err = os.WriteFile(".replica_test/.nodereplica", yamlRaw, 0644)
+		if err != nil {
+			t.Errorf("Failed to write config file: %v", err)
+			return
+		}
 
 		err = replica.Open(&dir)
 		if err != nil {
@@ -1136,7 +1148,7 @@ func TestServerRelayToReplicas(t *testing.T) {
 
 		replica2.Config = &nodereplica.Config{
 			ServerConfig: &server.Config{
-				Address:     "localhost:4003",
+				Address:     "localhost:4005",
 				UseTLS:      false,
 				ReadTimeout: 10,
 				BufferSize:  1024,
@@ -1178,14 +1190,14 @@ func TestServerRelayToReplicas(t *testing.T) {
 	primaryConfig := `health-check-interval: 1
 max-memory-threshold: 75
 server-config:
-    address: localhost:4001
+    address: localhost:4006
     use-tls: false
     cert-file: /
     key-file: /
     read-timeout: 10
     buffer-size: 1024
 read-replicas:
-    - server-address: localhost:4002
+    - server-address: localhost:4004
       use-tls: false
       ca-cert-file: /
       connect-timeout: 5
@@ -1194,7 +1206,7 @@ read-replicas:
       max-retries: 3
       retry-wait-time: 1
       buffer-size: 1024
-    - server-address: localhost:4003
+    - server-address: localhost:4005
       use-tls: false
       ca-cert-file: /
       connect-timeout: 5
@@ -1230,7 +1242,7 @@ read-replicas:
 	defer os.Remove(".journal")
 	defer os.Remove(".node")
 
-	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4001")
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4006")
 	if err != nil {
 		nr.Close()
 		replica.Close()
@@ -1241,7 +1253,10 @@ read-replicas:
 	// Connect to the address with tcp
 	conn, err := net.DialTCP("tcp", nil, tcpAddr)
 	if err != nil {
+		replica.Close()
+		replica2.Close()
 		t.Fatalf("Failed to connect to server: %v", err)
+
 	}
 
 	// We authenticate
@@ -1305,7 +1320,7 @@ read-replicas:
 	}
 
 	// We connect to replica2 and check if all the data is there
-	tcpAddrRep2, err := net.ResolveTCPAddr("tcp4", "localhost:4003")
+	tcpAddrRep2, err := net.ResolveTCPAddr("tcp4", "localhost:4005")
 	if err != nil {
 		conn.Close()
 		nr.Close()
