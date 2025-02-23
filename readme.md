@@ -17,6 +17,7 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - **Self-healing** Automatic data recovery.
 - **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR, REGX
 - **Journaling** used for node recovery.
+- **Async Journal Write** Journal writes are done asynchronously.
 - **Multi-platform** Linux, Windows, MacOS
 
 ## Todo
