@@ -13,3 +13,9 @@ src/.env
 src/*.exe
 src/supermassive
 supermassive
+.cluster
+.node
+.node-replica
+src/.node
+src/.node-replica
+src/.cluster
