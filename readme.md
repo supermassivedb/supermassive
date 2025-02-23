@@ -7,19 +7,17 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 
 ## Features
 
-- **Highly scalable** Scale horizontally with ease.
-- **Distributed** Data is distributed across multiple nodes.
-- **Sharded** Data is sharded across multiple nodes.
-- **Robust Health Checking System** Health checks are performed on all nodes.
-- **Smart Data Distribution** uses a sequence-based round-robin approach for distributing writes across primary nodes.
-- **Automatic Fail-over** Automatic fail-over of primary nodes on write failure.
+- **Highly scalable** Scale horizontally with ease.  Simply add more nodes to the cluster.
+- **Distributed** Data is distributed across multiple nodes in a sharded fashion.
+- **Robust Health Checking System** Health checks are performed on all nodes, if any node is marked unhealthy we will try to recover it.
+- **Smart Data Distribution** uses a sequence-based round-robin approach for distributing writes across primary nodes.  This ensures that all primary nodes get an equal share of writes.
+- **Automatic Fail-over** Automatic fail-over of primary nodes on write failure. If a primary node is unavailable for a write, we go to the next available primary node.
 - **Parallel Read Operations** Read operations are performed in parallel.
-- **Consistency Management** Timestamp-based version control to handle conflicts.
-- **Fault-tolerant** Replication and fail-over are supported.
-- **Self-healing** Automatic data recovery.
+- **Consistency Management** Timestamp-based version control to handle conflicts. The most recent value is always returned, the rest are deleted.
+- **Fault-tolerant** Replication and fail-over are supported. If a node goes down, the cluster will continue to function.
+- **Self-healing** Automatic data recovery.  A node can recover from a journal.  A node replica can recover from a primary node via a check point like algorithm.
 - **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR, REGX
-- **Journaling** used for node recovery.
-- **Async Journal Write** Journal writes are done asynchronously.
+- **Async Journal** Operations are written to a journal asynchronously.  This allows for fast writes and recovery.
 - **Multi-platform** Linux, Windows, MacOS
 
 ## Getting Started
