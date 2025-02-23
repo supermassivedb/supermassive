@@ -12,7 +12,7 @@ SuperMassive is a highly scalable, in-memory, distributed, sharded, fault-tolera
 - **Consistency Management** Timestamp-based version control to handle conflicts.
 - **Fault-tolerant** Replication and fail-over are supported.
 - **Self-healing** Automatic data recovery.
-- **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR
+- **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR, REGX
 - **Journaling** used for node recovery.
 - **Multi-platform** Linux, Windows, MacOS
 
