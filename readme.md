@@ -94,6 +94,7 @@ A `node` acts as a primary shard and a `replica` acts as a read replica to the p
 
 ```yaml
 health-check-interval: 2
+max-memory-threshold: 75
 server-config:
     address: localhost:4001
     use-tls: false
@@ -124,7 +125,7 @@ server-config:
     key-file: /
     read-timeout: 10
     buffer-size: 1024
-
+max-memory-threshold: 75
 ```
 
 ### Examples
