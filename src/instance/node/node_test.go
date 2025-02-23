@@ -952,3 +952,126 @@ func TestServerStat(t *testing.T) {
 	nr.Close()
 
 }
+
+func TestServerConfigRefresh(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new node
+	nr, err := New(logger, "test-key")
+	if err != nil {
+		t.Fatalf("Failed to create node replica: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		err := nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open node replica: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".journal")
+	defer os.Remove(".node")
+
+	// We read the current config, modify it and then run RCNF
+	config, err := os.ReadFile(".node")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read config file: %v", err)
+	}
+
+	// We decode the config
+	var c Config
+	err = yaml.Unmarshal(config, &c)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to unmarshal config file: %v", err)
+	}
+
+	// We modify the config
+	c.ServerConfig.BufferSize = 2048
+
+	// We encode the config
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to marshal config data: %v", err)
+	}
+
+	// We truncate the file
+	err = os.WriteFile(".node", data, 0644)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4001")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("NAUTH %x\r\n", sha256.Sum256([]byte("test-key")))))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("RCNF\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to refresh config: %v", err)
+	}
+
+	// We expect "OK configs reloaded" as response
+
+	buf = make([]byte, 1024)
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK configs reloaded\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK configs reloaded', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
+
+	if nr.Config.ServerConfig.BufferSize != 2048 {
+		nr.Close()
+		t.Fatalf("Expected buffer size 2048, got %d", nr.Config.ServerConfig.BufferSize)
+	}
+
+	nr.Close()
+}

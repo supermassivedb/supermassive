@@ -991,13 +991,6 @@ func TestServerConfigRefresh(t *testing.T) {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	// We write the config back
-	err = os.WriteFile(".nodereplica", data, 0644)
-	if err != nil {
-		nr.Close()
-		t.Fatalf("Failed to write config file: %v", err)
-	}
-
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4002")
 	if err != nil {
 		nr.Close()
