@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
+	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -362,10 +363,10 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			// Check for optional offset and limit
 			// Can be REGX <pattern> <offset> <limit>
 			// or REGX <pattern>
-			var offset, limit int
+			var offset, limit *int
 			if len(strings.Split(string(command), " ")) > 2 {
-				offset, _ = strconv.Atoi(strings.Split(string(command), " ")[2])
-				limit, _ = strconv.Atoi(strings.Split(string(command), " ")[3])
+				*offset, _ = strconv.Atoi(strings.Split(string(command), " ")[2])
+				*limit, _ = strconv.Atoi(strings.Split(string(command), " ")[3])
 			}
 
 			pattern := strings.Split(string(command), " ")[1]
@@ -374,7 +375,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 
 			// We acquire read lock
 			h.NodeReplica.Lock.RLock()
-			entries, err := h.NodeReplica.Storage.GetWithRegex(pattern, &offset, &limit)
+			entries, err := h.NodeReplica.Storage.GetWithRegex(pattern, offset, limit)
 			if err != nil {
 				_, err = conn.Write([]byte(fmt.Sprintf("ERR %s\r\n", err.Error())))
 				if err != nil {
@@ -385,6 +386,8 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.NodeReplica.Lock.RUnlock()
 				return
 			}
+
+			log.Println(entries)
 
 			for i, entry := range entries {
 				if i == 0 {
@@ -397,6 +400,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 
 			// We release read lock
 			h.NodeReplica.Lock.RUnlock()
+
+			if len(results) == 0 {
+				_, err = conn.Write([]byte("ERR no results found\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We join all results into a single byte slice
 			_, err = conn.Write(bytes.Join(results, []byte("")))
 			if err != nil {
