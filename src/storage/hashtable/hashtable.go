@@ -393,3 +393,48 @@ func (ht *HashTable) GetWithRegex(pattern string, limit, offset *int) ([]Entry, 
 
 	return results, nil
 }
+
+// Stats returns detailed statistics about the hash table
+func (ht *HashTable) Stats() map[string]string {
+	stats := make(map[string]string)
+
+	// Basic metrics
+	stats["size"] = fmt.Sprintf("%d", ht.size)
+	stats["used"] = fmt.Sprintf("%d", ht.used)
+	stats["load_factor"] = fmt.Sprintf("%.4f", float64(ht.used)/float64(ht.size))
+
+	// Thresholds
+	stats["grow_threshold"] = fmt.Sprintf("%.4f", ht.growThreshold)
+	stats["shrink_threshold"] = fmt.Sprintf("%.4f", ht.shrinkThreshold)
+
+	// Calculate PSL statistics
+	var totalPSL uint32
+	var maxPSL uint32
+	emptyBuckets := uint32(0)
+
+	for _, entry := range ht.buckets {
+		if entry.Key == "" {
+			emptyBuckets++
+			continue
+		}
+		totalPSL += entry.PSL
+		if entry.PSL > maxPSL {
+			maxPSL = entry.PSL
+		}
+	}
+
+	// PSL metrics
+	stats["avg_probe_length"] = fmt.Sprintf("%.4f", float64(totalPSL)/float64(ht.used))
+	stats["max_probe_length"] = fmt.Sprintf("%d", maxPSL)
+
+	// Space efficiency
+	stats["empty_buckets"] = fmt.Sprintf("%d", emptyBuckets)
+	stats["empty_bucket_ratio"] = fmt.Sprintf("%.4f", float64(emptyBuckets)/float64(ht.size))
+	stats["utilization"] = fmt.Sprintf("%.4f", float64(ht.used)/float64(ht.size))
+
+	// State indicators
+	stats["needs_grow"] = fmt.Sprintf("%t", ht.shouldGrow())
+	stats["needs_shrink"] = fmt.Sprintf("%t", ht.shouldShrink())
+
+	return stats
+}

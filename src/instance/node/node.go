@@ -374,10 +374,10 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			// Check for optional offset and limit
 			// Can be REGX <pattern> <offset> <limit>
 			// or REGX <pattern>
-			var offset, limit int
+			var offset, limit *int
 			if len(strings.Split(string(command), " ")) > 2 {
-				offset, _ = strconv.Atoi(strings.Split(string(command), " ")[2])
-				limit, _ = strconv.Atoi(strings.Split(string(command), " ")[3])
+				*offset, _ = strconv.Atoi(strings.Split(string(command), " ")[2])
+				*limit, _ = strconv.Atoi(strings.Split(string(command), " ")[3])
 			}
 
 			pattern := strings.Split(string(command), " ")[1]
@@ -386,7 +386,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 
 			// We acquire read lock
 			h.Node.Lock.RLock()
-			entries, err := h.Node.Storage.GetWithRegex(pattern, &offset, &limit)
+			entries, err := h.Node.Storage.GetWithRegex(pattern, offset, limit)
 			if err != nil {
 				_, err = conn.Write([]byte(fmt.Sprintf("ERR %s\r\n", err.Error())))
 				if err != nil {
@@ -900,17 +900,18 @@ func (n *Node) relayToReplicas(command string) {
 }
 
 // MemoryCheck checks the memory usage of the node
+// true for ok (not out of memory), false for out of memory
 func (n *Node) MemoryCheck() bool {
 	// Get the current memory usage
 	currentMemoryUsage := utility.GetCurrentMemoryUsage()
 
-	// Calculate the percentage of current memory usage relative to n.MaxMemory
+	// Calculate the percentage of current memory usage relative to nr.MaxMemory
 	memoryUsagePercentage := (float64(currentMemoryUsage) / float64(n.MaxMemory)) * 100
 
 	// We compare it with the MaxMemoryThreshold set in Config
 	if memoryUsagePercentage > float64(n.Config.MaxMemoryThreshold) {
-		return true
+		return false
 	}
 
-	return false
+	return true
 }

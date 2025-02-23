@@ -428,3 +428,55 @@ func NewIteratorAtPage(pager *Pager, startPage int) (*Iterator, error) {
 
 	return it, nil
 }
+
+// Stats returns statistics about the pager
+func (p *Pager) Stats() map[string]string {
+	stats := make(map[string]string)
+
+	// Basic file information
+	fileInfo, err := p.file.Stat()
+	if err == nil {
+		stats["file_name"] = fileInfo.Name()
+		stats["file_size"] = fmt.Sprintf("%d", fileInfo.Size())
+		stats["file_mode"] = fileInfo.Mode().String()
+		stats["modified_time"] = fileInfo.ModTime().Format(time.RFC3339)
+	}
+
+	// Pager configuration
+	stats["page_size"] = fmt.Sprintf("%d", p.pageSize)
+	stats["sync_enabled"] = fmt.Sprintf("%t", p.sync)
+	stats["sync_interval"] = p.syncInterval.String()
+	stats["is_closed"] = fmt.Sprintf("%t", p.closed.Load())
+
+	// Page statistics
+	totalPages := p.PageCount()
+	stats["total_pages"] = fmt.Sprintf("%d", totalPages)
+	stats["last_page"] = fmt.Sprintf("%d", p.LastPage())
+
+	// Storage efficiency
+	headerSize := int64(16) // 8 bytes for data size + 8 bytes for overflow flag
+	totalHeaderSize := headerSize * int64(totalPages)
+	totalStorageSize := fileInfo.Size()
+	dataSize := totalStorageSize - totalHeaderSize
+
+	stats["total_header_size"] = fmt.Sprintf("%d", totalHeaderSize)
+	stats["total_data_size"] = fmt.Sprintf("%d", dataSize)
+	stats["storage_efficiency"] = fmt.Sprintf("%.4f", float64(dataSize)/float64(totalStorageSize))
+
+	// Calculate average page utilization
+	if totalPages > 0 {
+		avgPageSize := float64(dataSize) / float64(totalPages)
+		pageUtilization := avgPageSize / float64(p.pageSize)
+		stats["avg_page_size"] = fmt.Sprintf("%.2f", avgPageSize)
+		stats["page_utilization"] = fmt.Sprintf("%.4f", pageUtilization)
+	} else {
+		stats["avg_page_size"] = "0"
+		stats["page_utilization"] = "0"
+	}
+
+	// Performance indicators
+	overhead := float64(totalHeaderSize) / float64(totalStorageSize)
+	stats["header_overhead_ratio"] = fmt.Sprintf("%.4f", overhead)
+
+	return stats
+}

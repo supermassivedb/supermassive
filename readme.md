@@ -23,7 +23,7 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - **Multi-platform** Linux, Windows, MacOS
 
 ## Discord
-Join the SuperMassive Discord server to chat with the maintainers and other users.  We are always looking for feedback and suggestions.
+Join the SuperMassive Discord server to chat with the maintainers and other users.  We are always looking for feedback, bugs and discussion.
 
 [![Discord](https://img.shields.io/discord/1343082076324495402?color=yellow&label=Discord&logo=discord&style=for-the-badge)](https://discord.gg/yfE5MV5w4d)
 
