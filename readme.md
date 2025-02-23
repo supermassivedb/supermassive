@@ -1,5 +1,8 @@
 # SUPERMASSIVE
-SuperMassive is a highly scalable, in-memory, distributed, sharded, fault-tolerant, and self-healing key-value database.
+SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tolerant, and self-healing key-value database.
+
+> [!IMPORTANT]
+> SuperMassive is in active development and is not ready for production use.
 
 ## Features
 - **Highly scalable** Scale horizontally with ease.
@@ -15,6 +18,11 @@ SuperMassive is a highly scalable, in-memory, distributed, sharded, fault-tolera
 - **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR, REGX
 - **Journaling** used for node recovery.
 - **Multi-platform** Linux, Windows, MacOS
+
+## Todo
+- [ ] Cluster unit and integration tests
+- [ ] Node unit and integration tests
+- [ ] Replica unit and integration tests
 
 ## Example
 For testing purposes start cluster with ``--local`` to start with no user authentication.
