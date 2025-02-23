@@ -29,11 +29,12 @@
 package server
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -57,7 +58,8 @@ func TestServerStart(t *testing.T) {
 	}
 
 	handler := &MockConnectionHandler{}
-	server := New(config, handler)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := New(config, logger, handler)
 
 	// Start the server in a separate goroutine
 	go func() {
@@ -70,7 +72,7 @@ func TestServerStart(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Get the actual address the server is listening on
-	addr := server.listener.Addr().String()
+	addr := server.Listener.Addr().String()
 
 	// Connect to the server
 	conn, err := net.Dial("tcp", addr)
@@ -79,11 +81,7 @@ func TestServerStart(t *testing.T) {
 	}
 	_ = conn.Close()
 
-	// Shutdown the server
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(); err != nil {
 		t.Errorf("Failed to shutdown server: %v", err)
 	}
 }
@@ -98,7 +96,8 @@ func TestServerShutdown(t *testing.T) {
 	}
 
 	handler := &MockConnectionHandler{}
-	server := New(config, handler)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := New(config, logger, handler)
 
 	// Start the server in a separate goroutine
 	go func() {
@@ -110,16 +109,12 @@ func TestServerShutdown(t *testing.T) {
 	// Give the server a moment to start
 	time.Sleep(100 * time.Millisecond)
 
-	// Shutdown the server
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(); err != nil {
 		t.Errorf("Failed to shutdown server: %v", err)
 	}
 
 	// Ensure the server is no longer accepting connections
-	_, err := net.Dial("tcp", server.listener.Addr().String())
+	_, err := net.Dial("tcp", server.Listener.Addr().String())
 	if err == nil {
 		t.Fatalf("Server is still accepting connections after shutdown")
 	}
@@ -135,7 +130,8 @@ func TestServerMultipleConnections(t *testing.T) {
 	}
 
 	handler := &MockConnectionHandler{}
-	server := New(config, handler)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := New(config, logger, handler)
 
 	// Start the server in a separate goroutine
 	go func() {
@@ -148,7 +144,7 @@ func TestServerMultipleConnections(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Get the actual address the server is listening on
-	addr := server.listener.Addr().String()
+	addr := server.Listener.Addr().String()
 
 	// Connect to the server multiple times
 	for i := 0; i < 10; i++ {
@@ -159,13 +155,37 @@ func TestServerMultipleConnections(t *testing.T) {
 		_ = conn.Close()
 	}
 
-	// Shutdown the server
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(); err != nil {
 		t.Errorf("Failed to shutdown server: %v", err)
 	}
+}
+
+// Should work on any platform
+func generateCerts(certFile, keyFile string) error {
+	// Generate private key
+	cmd := exec.Command("openssl", "genpkey", "-algorithm", "RSA", "-out", keyFile)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	// Generate certificate signing request (CSR)
+	cmd = exec.Command("openssl", "req", "-new", "-key", keyFile, "-out", "test_cert.csr", "-subj", "/CN=localhost")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate CSR: %v", err)
+	}
+
+	// Generate self-signed certificate
+	cmd = exec.Command("openssl", "x509", "-req", "-days", "365", "-in", "test_cert.csr", "-signkey", keyFile, "-out", certFile)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate certificate: %v", err)
+	}
+
+	// Clean up CSR file
+	if err := os.Remove("test_cert.csr"); err != nil {
+		return fmt.Errorf("failed to remove CSR file: %v", err)
+	}
+
+	return nil
 }
 
 // TestServerTLS tests the server's TLS functionality
@@ -173,19 +193,34 @@ func TestServerTLS(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Failed to get working directory: %v", err)
-
 	}
+
+	certFile := fmt.Sprintf("%s/test_cert.pem", wd)
+	keyFile := fmt.Sprintf("%s/test_key.pem", wd)
+
+	// Generate certificates automatically
+	if err := generateCerts(certFile, keyFile); err != nil {
+		t.Fatalf("Failed to generate certificates: %v", err)
+	}
+
+	// We ensure certificates are removed after test
+	defer func() {
+		os.Remove(certFile)
+		os.Remove(keyFile)
+	}()
+
 	config := &Config{
 		Address:     "localhost:0",
 		UseTLS:      true,
-		CertFile:    fmt.Sprintf("%s/test_cert.pem", wd),
-		KeyFile:     fmt.Sprintf("%s/test_key.pem", wd),
+		CertFile:    certFile,
+		KeyFile:     keyFile,
 		ReadTimeout: 5,
 		BufferSize:  1024,
 	}
 
 	handler := &MockConnectionHandler{}
-	server := New(config, handler)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := New(config, logger, handler)
 
 	// Start the server in a separate goroutine
 	go func() {
@@ -198,7 +233,7 @@ func TestServerTLS(t *testing.T) {
 	time.Sleep(512 * time.Millisecond)
 
 	// Get the actual address the server is listening on
-	addr := server.listener.Addr().String()
+	addr := server.Listener.Addr().String()
 
 	// Connect to the server using TLS
 	conn, err := tls.Dial("tcp", addr, &tls.Config{
@@ -209,11 +244,7 @@ func TestServerTLS(t *testing.T) {
 	}
 	_ = conn.Close()
 
-	// Shutdown the server
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(); err != nil {
 		t.Errorf("Failed to shutdown server: %v", err)
 	}
 }

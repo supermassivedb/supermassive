@@ -30,7 +30,9 @@ package client
 
 import (
 	"context"
+	"log/slog"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -46,7 +48,8 @@ func TestNew(t *testing.T) {
 		RetryWaitTime:  1,
 		BufferSize:     1024,
 	}
-	client := New(config)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	client := New(config, logger)
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
@@ -63,7 +66,8 @@ func TestClient_Connect(t *testing.T) {
 		RetryWaitTime:  1,
 		BufferSize:     1024,
 	}
-	client := New(config)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	client := New(config, logger)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -99,7 +103,8 @@ func TestClient_Send(t *testing.T) {
 		RetryWaitTime:  1,
 		BufferSize:     1024,
 	}
-	client := New(config)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	client := New(config, logger)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -140,7 +145,9 @@ func TestClient_Receive(t *testing.T) {
 		RetryWaitTime:  1,
 		BufferSize:     1024,
 	}
-	client := New(config)
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	client := New(config, logger)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -185,7 +192,9 @@ func TestClient_Close(t *testing.T) {
 		RetryWaitTime:  1,
 		BufferSize:     1024,
 	}
-	client := New(config)
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	client := New(config, logger)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
