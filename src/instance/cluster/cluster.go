@@ -658,6 +658,14 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 			return
+		case strings.HasPrefix(string(command), "STAT"):
+			stats := h.Cluster.Stats()
+
+			_, err = conn.Write(stats)
+			if err != nil {
+				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
 		default:
 			_, err = conn.Write([]byte("ERR unknown command\r\n"))
 			if err != nil {
@@ -667,6 +675,68 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		}
 
 	}
+}
+
+// Stats get stats on the cluster and it's nodes
+func (c *Cluster) Stats() []byte {
+	response := []byte("OK\r\n")
+	// We send a stat command to all nodes and form a response
+
+	for _, nodeConn := range c.NodeConnections {
+		response = append(response, fmt.Sprintf("NODE %s\r\n", nodeConn.Config.Node.ServerAddress)...)
+		if nodeConn.Health {
+			// We send the command
+			err := nodeConn.Client.Send(nodeConn.Context, []byte("STAT\r\n"))
+			if err != nil {
+				c.Logger.Warn("write error", "error", err)
+				return []byte("ERR write error\r\n")
+			}
+
+			// We receive the response
+			rec, err := nodeConn.Client.Receive(nodeConn.Context)
+			if err != nil {
+				c.Logger.Warn("read error", "error", err)
+				return []byte("ERR read error\r\n")
+			}
+
+			rec = bytes.TrimPrefix(rec, []byte("OK\r\n"))
+
+			response = append(response, rec...)
+		} else {
+
+			response = append(response, []byte("down\r\n")...)
+		}
+
+		// We check the replicas
+		for _, replicaConn := range nodeConn.Replicas {
+			response = append(response, fmt.Sprintf("REPLICA %s\r\n", replicaConn.Config.ServerAddress)...)
+			if replicaConn.Health {
+				// We send the command
+				err := replicaConn.Client.Send(replicaConn.Context, []byte("STAT\r\n"))
+				if err != nil {
+					c.Logger.Warn("write error", "error", err)
+					return []byte("ERR write error\r\n")
+				}
+
+				// We receive the response
+				rec, err := replicaConn.Client.Receive(replicaConn.Context)
+				if err != nil {
+					c.Logger.Warn("read error", "error", err)
+					return []byte("ERR read error\r\n")
+				}
+
+				rec = bytes.TrimPrefix(rec, []byte("OK\r\n"))
+
+				response = append(response, rec...)
+			} else {
+
+				response = append(response, []byte("down\r\n")...)
+			}
+
+		}
+	}
+
+	return response
 }
 
 // ParallelIncrDecr increments a key in all primary nodes in parallel

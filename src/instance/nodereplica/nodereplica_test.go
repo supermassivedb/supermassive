@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"io/ioutil"
+	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -919,6 +920,8 @@ func TestServerStat(t *testing.T) {
 		"needs_grow",
 		"used",
 	}
+
+	log.Println(string(buf[:n]))
 
 	for _, keyword := range keywords {
 		if !strings.Contains(string(buf[:n]), keyword) {

@@ -188,6 +188,41 @@ key2 1.5
 ------- SOON TO BE IMPLEMENTED -------
 
 STAT -- get stats on all nodes in the cluster
+OK
+NODE localhost:4001 -- get stats on a specific node
+DISK
+    sync_enabled true
+    sync_interval 128ms
+    avg_page_size 1024.00
+    file_mode -rwxrwxr-x
+    is_closed false
+    last_page 99
+    storage_efficiency 0.9846
+    file_name .journal
+    page_size 1024
+    total_pages 100
+    total_header_size 1600
+    total_data_size 102400
+    page_utilization 1.0000
+    header_overhead_ratio 0.0154
+    file_size 104000
+    modified_time 2025-02-23T04:39:31-05:00
+MEMORY
+    load_factor 0.3906
+    grow_threshold 0.7500
+    max_probe_length 2
+    empty_buckets 156
+    utilization 0.3906
+    needs_grow false
+    needs_shrink false
+    size 256
+    used 100
+    shrink_threshold 0.2500
+    avg_probe_length 0.2600
+    empty_bucket_ratio 0.6094
+REPLICA localhost:4002 -- Will list primary, then all replica stats under each primary
+.. more
+
 
 NNDE host:port -- add a node to the cluster
 
