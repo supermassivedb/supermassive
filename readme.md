@@ -22,6 +22,11 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - **Async Node Journal** Operations are written to a journal asynchronously.  This allows for fast writes and recovery.
 - **Multi-platform** Linux, Windows, MacOS
 
+## Discord
+Join the SuperMassive Discord server to chat with the maintainers and other users.  We are always looking for feedback and suggestions.
+
+[![Discord](https://img.shields.io/discord/898678000073048832?color=blue&label=Discord&logo=discord&style=for-the-badge)](https://discord.gg/yfE5MV5w4d)
+
 ## Getting Started
 
 You can use TLS for your client-cluster communication and cluster-node node-replica communication.  A cluster can be started with TLS and so can other instance types based on configuration files.
