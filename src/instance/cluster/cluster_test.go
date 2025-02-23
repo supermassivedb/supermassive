@@ -30,9 +30,12 @@ package cluster
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"gopkg.in/yaml.v3"
 	"io/ioutil"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"supermassive/network/client"
@@ -286,5 +289,70 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create default config file: %v", err)
 	}
+
+}
+
+func TestServerAuth(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new node replica
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create node replica: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		err := nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open node replica: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".cluster")
+
+	// We create a tcp client to the cluster, we know the default port is going to be 4000
+	// Resolve the string address to a TCP address
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4000")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	conn.Close()
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	nr.Close()
 
 }
