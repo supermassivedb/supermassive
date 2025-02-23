@@ -221,7 +221,7 @@ MEMORY
 REPLICA localhost:4002 -- Will list primary, then all replica stats under each primary
 .. more
 
-RCNF -- reload configuration files, will reload for entire cluster, nodes, and replicas.  Good when you want to change configurations without restarting the cluster.
+RCNF -- reload configuration files, will reload for entire cluster, nodes, and replicas.  Good when you want to change configurations without restarting the cluster or nodes.
 OK configs reloaded
 
 ```
