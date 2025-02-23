@@ -30,6 +30,9 @@ When starting a cluster instance you provide a `--username` and `--password`.  W
 
 The `user\0password` should be encoded in base64.
 
+There is only 1 user for the system.  You set it, you can change the user credentials any restart.
+It is advisable to call an environment variable to populate these flags or another method to keep the password secure.
+
 ```bash
 (echo -n "AUTH " && echo -n $"username\\0password" | base64 && cat) | nc -C localhost 4000
 OK authenticated
