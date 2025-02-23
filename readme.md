@@ -195,6 +195,10 @@ A primary after connected to replica will send a `STARTSYNC`, a replica will the
 5. PRIMARY is done sending pages to replica once `SYNCDONE` is sent to replica
 6. Primary and replica are now in sync
 
+## All nodes are full?
+Add more nodes to the cluster.  The cluster will automatically distribute the data across the new nodes.
+Primaries can shrink based on deletes allowing more data to be written over time based on new values taking precedence.
+
 ## Contributing
 To contribute to SuperMassive simply fork, make your changes, and submit a pull request with a detailed description on why, what changes were made.
 
