@@ -30,9 +30,12 @@ package nodereplica
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"gopkg.in/yaml.v3"
 	"io/ioutil"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"supermassive/network/server"
@@ -223,5 +226,69 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create default config file: %v", err)
 	}
+
+}
+
+func TestServerAuth(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new node replica
+	nr, err := New(logger, "test-key")
+	if err != nil {
+		t.Fatalf("Failed to create node replica: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		err := nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open node replica: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".journal")
+	defer os.Remove(".nodereplica")
+
+	// We create a tcp client to the replica, we know the default port is going to be 4002
+	// Resolve the string address to a TCP address
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4002")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("NAUTH %x\r\n", sha256.Sum256([]byte("test-key")))))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	conn.Close()
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	nr.Close()
 
 }
