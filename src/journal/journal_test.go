@@ -1,6 +1,6 @@
 // BSD 3-Clause License
 //
-// (C) Copyright 2025, Alex Gaetano Padula
+// (C) Copyright 2025, Alex Gaetano Padula & SuperMassive authors
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,8 +29,8 @@
 package journal
 
 import (
-	"awesomeProject366/storage/hashtable"
 	"os"
+	"supermassive/storage/hashtable"
 	"testing"
 )
 

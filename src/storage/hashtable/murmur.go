@@ -1,6 +1,6 @@
 // BSD 3-Clause License
 //
-// (C) Copyright 2025, Alex Gaetano Padula
+// (C) Copyright 2025, Alex Gaetano Padula & SuperMassive authors
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -33,6 +33,7 @@ import (
 	"math/bits"
 )
 
+// MurmurHash3 hashes a byte slice using the MurmurHash3 algorithm 32-bit version
 func MurmurHash3(key []byte, seed uint32) uint32 {
 	const c1 uint32 = 0xcc9e2d51
 	const c2 uint32 = 0x1b873593

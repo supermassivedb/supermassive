@@ -1,6 +1,6 @@
 // BSD 3-Clause License
 //
-// (C) Copyright 2025, Alex Gaetano Padula
+// (C) Copyright 2025, Alex Gaetano Padula & SuperMassive authors
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -35,26 +35,28 @@ import (
 	"time"
 )
 
-// Entry represents a key-value pair in the hash table
+// Entry is a key-value pair in the hash table
 type Entry struct {
-	Key       string
-	Value     interface{}
-	Timestamp time.Time
-	PSL       uint32 // Probe sequence length
+	Key       string      // The key witin the entry
+	Value     interface{} // The value within the entry
+	Timestamp time.Time   // The timestamp of the entry
+	PSL       uint32      // Probe sequence length
 }
 
-// FilterFunc defines a function type for filtering entries
+// FilterFunc is a function type for filtering entries
 type FilterFunc func(entry Entry) bool
 
 // HashTable implements Robin Hood hashing with dynamic resizing
 type HashTable struct {
-	buckets []Entry
-	size    uint32
-	used    uint32
+	buckets []Entry // Bucket entries containing key-value pairs
+	size    uint32  // Number of buckets
+	used    uint32  // Number of used buckets
 	// Growth and shrink thresholds
-	growThreshold   float64
-	shrinkThreshold float64
+	growThreshold   float64 // Threshold to grow the table
+	shrinkThreshold float64 // Threshold to shrink the table
 }
+
+// Hashtable is not thread-safe**
 
 // New creates a new hash table with default size and thresholds
 func New() *HashTable {
@@ -72,6 +74,7 @@ func NewWithOptions(initialSize uint32, growThreshold, shrinkThreshold float64) 
 }
 
 // hash generates a hash for the given key
+// we use MurmurHash3 as it is fast and has good distribution..
 func (ht *HashTable) hash(key string) uint32 {
 	h := MurmurHash3([]byte(key), 0)
 	return h % ht.size
@@ -86,7 +89,7 @@ func (ht *HashTable) resize(newSize uint32) {
 
 	// Reinsert all existing entries
 	for _, entry := range oldBuckets {
-		if entry.Key != "" {
+		if entry.Key != "" { // Skip empty buckets
 			ht.Put(entry.Key, entry.Value)
 		}
 	}
@@ -106,9 +109,10 @@ func (ht *HashTable) shouldShrink() bool {
 func (ht *HashTable) Put(key string, value interface{}) bool {
 	// Check if we need to grow the table
 	if ht.shouldGrow() {
-		ht.resize(ht.size * 2)
+		ht.resize(ht.size * 2) // Double the size
 	}
 
+	// Initialize the entry
 	entry := Entry{
 		Key:       key,
 		Value:     value,
@@ -131,7 +135,7 @@ func (ht *HashTable) Put(key string, value interface{}) bool {
 			return true
 		}
 
-		// Robin Hood hashing: if current entry has lower PSL, swap
+		// We use robin hood hashing, thus if current entry has lower PSL, swap
 		if entry.PSL > ht.buckets[index].PSL {
 			entry, ht.buckets[index] = ht.buckets[index], entry
 		}
@@ -232,6 +236,7 @@ func (ht *HashTable) Traverse(filter FilterFunc) []Entry {
 	return results
 }
 
+// Incr increments the value of a key by the given increment value
 func (ht *HashTable) Incr(key string, incrValue interface{}) (string, time.Time, error) {
 
 	// We check if the value is an integer
@@ -281,6 +286,7 @@ func (ht *HashTable) Incr(key string, incrValue interface{}) (string, time.Time,
 	}
 }
 
+// Decr decrements the value of a key by the given decrement value
 func (ht *HashTable) Decr(key string, incrValue interface{}) (string, time.Time, error) {
 
 	// We check if the value is an integer
@@ -348,7 +354,7 @@ func (ht *HashTable) GetWithRegex(pattern string, limit, offset *int) ([]Entry, 
 		return nil, err
 	}
 
-	// Pre-allocate slice with a reasonable initial capacity
+	// Pre-alloc'd slice with a reasonable initial capacity
 	results := make([]Entry, 0, ht.used)
 
 	// Initialize counters
