@@ -140,6 +140,12 @@ func (nr *NodeReplica) Open() error {
 		return err
 	}
 
+	// We recover from journal
+	// Populates the storage with the journal data
+	if err = nr.Journal.Recover(nr.Storage); err != nil {
+		return err
+	}
+
 	// We start the server
 	err = nr.Server.Start()
 	if err != nil {

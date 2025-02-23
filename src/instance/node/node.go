@@ -165,6 +165,12 @@ func (n *Node) Open() error {
 
 	go n.backgroundHealthChecks()
 
+	// We recover from journal
+	// Populates the storage with the journal data
+	if err = n.Journal.Recover(n.Storage); err != nil {
+		return err
+	}
+
 	// We start the server
 	err = n.Server.Start()
 	if err != nil {
