@@ -336,104 +336,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 				return
 			}
-		case strings.HasPrefix(string(command), "SYNCFROM"):
-			h.Node.Lock.Lock() // We lock primary during sync
-
-			// SYNCFROM <page number>
-			if len(strings.Split(string(command), " ")) < 2 {
-				_, err = conn.Write([]byte("ERR invalid command\r\n"))
-				if err != nil {
-					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-					h.Node.Lock.Unlock()
-					return
-				}
-				h.Node.Lock.Unlock()
-				return
-			}
-
-			lastJournalPage := strings.Split(string(command), " ")[1]
-
-			// Convert to int
-			lastJournalPageInt, err := strconv.Atoi(lastJournalPage)
-			if err != nil {
-				_, err = conn.Write([]byte("ERR invalid command\r\n"))
-				if err != nil {
-					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-					h.Node.Lock.Unlock()
-					return
-				}
-				h.Node.Lock.Unlock()
-				return
-			}
-
-			// We get the iterator starting at requested page
-			it, err := pager.NewIteratorAtPage(h.Node.Journal.Pager, lastJournalPageInt)
-			if err != nil {
-				_, err = conn.Write([]byte("ERR invalid command\r\n"))
-				if err != nil {
-					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-					h.Node.Lock.Unlock()
-					return
-				}
-				h.Node.Lock.Unlock()
-				return
-			}
-
-			// We send missing operations to replica
-			for it.Next() {
-				data, err := it.Read()
-				if err != nil {
-					break
-				}
-
-				e, err := journal.Deserialize(data)
-				if err != nil {
-					continue
-				}
-
-				// We transmit the data to the replica
-
-				switch e.Op {
-				case journal.PUT:
-					_, err = conn.Write([]byte(fmt.Sprintf("PUT %s %s\r\n", e.Key, e.Value)))
-					if err != nil {
-						h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-						h.Node.Lock.Unlock()
-						return
-					}
-
-				case journal.DEL:
-					_, err = conn.Write([]byte(fmt.Sprintf("DEL %s\r\n", e.Key)))
-					if err != nil {
-						h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-						h.Node.Lock.Unlock()
-						return
-					}
-				case journal.INCR:
-					_, err = conn.Write([]byte(fmt.Sprintf("INCR %s %s\r\n", e.Key, e.Value)))
-					if err != nil {
-						h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-						h.Node.Lock.Unlock()
-						return
-					}
-				case journal.DECR:
-					_, err = conn.Write([]byte(fmt.Sprintf("DECR %s %s\r\n", e.Key, e.Value)))
-					if err != nil {
-						h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-						h.Node.Lock.Unlock()
-						return
-					}
-
-				}
-			}
-
-			_, err = conn.Write([]byte(fmt.Sprintf("SYNCDONE\r\n")))
-			if err != nil {
-				h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-				h.Node.Lock.Unlock()
-				return
-			}
-			h.Node.Lock.Unlock()
 
 		case strings.HasPrefix(string(command), "PUT"):
 			// We put the data
@@ -670,7 +572,138 @@ func (n *Node) backgroundHealthChecks() {
 								replicaConn.Health = true
 								n.Logger.Info("node replica is reconnected and healthy", "node", replicaConn.Client.Config.ServerAddress)
 							}
+
+							// Now once authenticated we send a STARTSYNC command
+							err = replicaConn.Client.Send(replicaConn.Context, []byte("STARTSYNC\r\n"))
+							if err != nil {
+								n.Logger.Warn("sync error", "error", err)
+							} else {
+
+								// Now we should get back a SYNCFROM <page number>
+								response, err := replicaConn.Client.Receive(replicaConn.Context)
+								if err != nil {
+									n.Logger.Warn("read error", "error", err)
+									continue
+								}
+
+								command := strings.TrimSuffix(string(response), "\r\n")
+
+								if strings.HasPrefix(string(command), "SYNCFROM") {
+									n.Lock.Lock() // We lock primary during sync
+
+									// SYNCFROM <page number>
+									if len(strings.Split(string(command), " ")) < 2 {
+										err = replicaConn.Client.Send(replicaConn.Context, []byte("ERR invalid command\r\n"))
+										if err != nil {
+											n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+											n.Lock.Unlock()
+											return
+										}
+										n.Lock.Unlock()
+										return
+									}
+
+									lastJournalPage := strings.Split(string(command), " ")[1]
+
+									// Convert to int
+									lastJournalPageInt, err := strconv.Atoi(lastJournalPage)
+									if err != nil {
+
+										if err != nil {
+											n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+											n.Lock.Unlock()
+											return
+										}
+										n.Lock.Unlock()
+										return
+									}
+
+									// We get the iterator starting at requested page
+									it, err := pager.NewIteratorAtPage(n.Journal.Pager, lastJournalPageInt)
+									if err != nil {
+										if err.Error() == "invalid start page: must be >= 0" || err.Error() == "start page  exceeds maximum pages 0" {
+											err = replicaConn.Client.Send(replicaConn.Context, []byte("SYNCDONE\r\n"))
+											if err != nil {
+												n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+												n.Lock.Unlock()
+												return
+											}
+											n.Logger.Warn("nothing to sync", "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+											n.Lock.Unlock()
+											return
+										}
+										err = replicaConn.Client.Send(replicaConn.Context, []byte("ERR invalid command\r\n"))
+										if err != nil {
+											n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+											n.Lock.Unlock()
+											return
+										}
+										n.Lock.Unlock()
+										return
+									}
+
+									// We send missing operations to replica
+									for it.Next() {
+										data, err := it.Read()
+										if err != nil {
+											break
+										}
+
+										e, err := journal.Deserialize(data)
+										if err != nil {
+											continue
+										}
+
+										// We transmit the data to the replica
+
+										switch e.Op {
+										case journal.PUT:
+											err = replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("PUT %s %s\r\n", e.Key, e.Value)))
+											if err != nil {
+												n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+												n.Lock.Unlock()
+												return
+											}
+
+										case journal.DEL:
+											err = replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("DEL %s\r\n", e.Key)))
+											if err != nil {
+												n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+												n.Lock.Unlock()
+												return
+											}
+										case journal.INCR:
+											err = replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("INCR %s %s\r\n", e.Key, e.Value)))
+											if err != nil {
+												n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+												n.Lock.Unlock()
+												return
+											}
+										case journal.DECR:
+											err = replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("DECR %s %s\r\n", e.Key, e.Value)))
+											if err != nil {
+												n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+												n.Lock.Unlock()
+												return
+											}
+
+										}
+									}
+
+									err = replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("SYNCDONE\r\n")))
+									if err != nil {
+										n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
+										n.Lock.Unlock()
+										return
+									}
+									n.Lock.Unlock()
+
+								}
+
+							}
+
 						}
+
 					}
 				} else {
 					// We ping
@@ -690,13 +723,12 @@ func (n *Node) backgroundHealthChecks() {
 
 					// We check if the response is "OK PONG\r\n"
 					if string(response) != "OK PONG\r\n" {
-						n.Logger.Warn("read error", "error", err)
+						n.Logger.Warn("unexpected response", "response", string(response))
 						// Mark the node as unhealthy
 						replicaConn.Health = false
 						continue
 					}
 				}
-
 			}
 		}
 	}

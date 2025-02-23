@@ -79,7 +79,7 @@ When a replica is down, the primary node will not be able to write to it.  The p
 When the replica comes back up, the primary node will send the missing data to the replica.  The replica will then be in sync with the primary node.
 
 This is using the journal pages and a specific piece of the protocol
-A replica will once connected to will send a `SYNCFROM pgnum` where pgnum is the last page number in the replica journal.  The primary will then send missing operations to the replica.
+A primary after connected to replica will send a `STARTSYNC`, a replica will then send a `SYNCFROM pgnum` where pgnum is the last page number in the replica journal.  The primary will then send missing operations to the replica.
 
 Communication looks like this
 ```

@@ -1,4 +1,4 @@
-health-check-interval: 30
+health-check-interval: 2
 server-config:
     address: localhost:4000
     use-tls: false

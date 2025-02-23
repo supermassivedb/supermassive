@@ -260,15 +260,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 
 					authenticated = true
 
-					// Because this is a replica we send over SYNCFROM PG <last journal page number>
-					// We know the connected should be a primary node
-					// The primary will now send us missing pages
-					_, err = conn.Write([]byte(fmt.Sprintf("SYNCFROM PG %d\r\n", h.NodeReplica.Journal.Pager.LastPage())))
-					if err != nil {
-						h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
-						return
-					}
-
 					continue
 				} else {
 					_, err = conn.Write([]byte("ERR invalid key\r\n"))
@@ -284,7 +275,18 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					return
 				}
 			}
-		case strings.HasPrefix(string(command), "IAMDONE"):
+		case strings.HasPrefix(string(command), "STARTSYNC"):
+
+			// Because this is a replica we send over SYNCFROM PG <last journal page number>
+			// We know the connected should be a primary node
+			// The primary will now send us missing pages
+			_, err = conn.Write([]byte(fmt.Sprintf("SYNCFROM %d\r\n", h.NodeReplica.Journal.Pager.LastPage())))
+			if err != nil {
+				h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
+
+		case strings.HasPrefix(string(command), "DONESYNC"):
 			// We are done syncing with primary
 			// We log it
 			h.NodeReplica.Logger.Info("synced with primary", "remote_addr", conn.RemoteAddr())
