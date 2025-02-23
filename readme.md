@@ -1,4 +1,6 @@
-# SUPERMASSIVE
+<div>
+    <h1 align="left"><img width="286" src="artwork/supermassive-logo-colored-v1.0.png"></h1>
+</div>
 
 SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tolerant, and self-healing key-value database.
 
