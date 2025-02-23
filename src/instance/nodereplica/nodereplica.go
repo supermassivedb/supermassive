@@ -100,11 +100,18 @@ func New(logger *slog.Logger, sharedKey string) (*NodeReplica, error) {
 }
 
 // Open opens a new node replica instance
-func (nr *NodeReplica) Open() error {
-	// We get the current working directory
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
+func (nr *NodeReplica) Open(dir *string) error {
+	var wd string
+	var err error
+	if dir == nil {
+		// We get the current working directory
+		wd, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	} else {
+		wd = *dir
+
 	}
 
 	// Config for node replica
@@ -341,6 +348,13 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			// We are done syncing with primary
 			// We log it
 			h.NodeReplica.Logger.Info("synced with primary", "remote_addr", conn.RemoteAddr())
+
+			// We write OK to the primary
+			_, err = conn.Write([]byte("OK synced\r\n"))
+			if err != nil {
+				h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
 
 		case strings.HasPrefix(string(command), "PING"):
 			_, err = conn.Write([]byte("OK PONG\r\n"))

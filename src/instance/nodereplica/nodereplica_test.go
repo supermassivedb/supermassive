@@ -125,7 +125,7 @@ func TestNodeReplica_Open(t *testing.T) {
 				c.Config = tt.config
 
 				go func() {
-					err = c.Open()
+					err = c.Open(nil)
 					if (err != nil) != tt.wantErr {
 						t.Errorf("Open() error = %v, wantErr %v", err, tt.wantErr)
 					}
@@ -242,7 +242,7 @@ func TestServerAuth(t *testing.T) {
 
 	// We open in background
 	go func() {
-		err := nr.Open()
+		err := nr.Open(nil)
 		if err != nil {
 			t.Fatalf("Failed to open node replica: %v", err)
 		}
@@ -306,7 +306,7 @@ func TestServerPing(t *testing.T) {
 
 	// We open in background
 	go func() {
-		err := nr.Open()
+		err := nr.Open(nil)
 		if err != nil {
 			t.Fatalf("Failed to open node replica: %v", err)
 		}
@@ -367,7 +367,7 @@ func TestServerCrud(t *testing.T) {
 
 	// We open in background
 	go func() {
-		err := nr.Open()
+		err := nr.Open(nil)
 		if err != nil {
 			t.Fatalf("Failed to open node replica: %v", err)
 		}
@@ -497,7 +497,7 @@ func TestServerIncrDecr(t *testing.T) {
 
 	// We open in background
 	go func() {
-		err := nr.Open()
+		err := nr.Open(nil)
 		if err != nil {
 			t.Fatalf("Failed to open node replica: %v", err)
 		}
@@ -627,7 +627,7 @@ func TestServerRegx(t *testing.T) {
 
 	// We open in background
 	go func() {
-		err := nr.Open()
+		err := nr.Open(nil)
 		if err != nil {
 			t.Fatalf("Failed to open node replica: %v", err)
 		}
@@ -801,7 +801,7 @@ func TestServerStat(t *testing.T) {
 
 	// We open in background
 	go func() {
-		err := nr.Open()
+		err := nr.Open(nil)
 		if err != nil {
 			t.Fatalf("Failed to open node replica: %v", err)
 		}
@@ -948,7 +948,7 @@ func TestServerConfigRefresh(t *testing.T) {
 
 	// We open in background
 	go func() {
-		err := nr.Open()
+		err := nr.Open(nil)
 		if err != nil {
 			t.Fatalf("Failed to open node replica: %v", err)
 		}
