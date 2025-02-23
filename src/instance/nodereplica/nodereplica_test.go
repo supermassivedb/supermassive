@@ -38,6 +38,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"supermassive/network/server"
 	"testing"
 	"time"
@@ -327,7 +328,6 @@ func TestServerPing(t *testing.T) {
 		t.Fatalf("Failed to connect to server: %v", err)
 	}
 
-	// We authenticate
 	_, err = conn.Write([]byte(fmt.Sprintf("PING\r\n")))
 	if err != nil {
 		conn.Close()
@@ -350,6 +350,136 @@ func TestServerPing(t *testing.T) {
 		nr.Close()
 		t.Fatalf("Expected 'OK PONG', got %s", string(buf[:n]))
 	}
+
+	nr.Close()
+
+}
+
+func TestServerCrud(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new node replica
+	nr, err := New(logger, "test-key")
+	if err != nil {
+		t.Fatalf("Failed to create node replica: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		err := nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open node replica: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".journal")
+	defer os.Remove(".nodereplica")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4002")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("NAUTH %x\r\n", sha256.Sum256([]byte("test-key")))))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("PUT hello world\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to write key-value: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK key-value written\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK key-value written', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("GET hello\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to get key-value: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if !strings.Contains(string(buf[:n]), "hello world") {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK key-value written', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("DEL hello\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to delete key-value: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK key-value deleted\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK key-value deleted', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
 
 	nr.Close()
 

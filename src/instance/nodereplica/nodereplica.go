@@ -630,6 +630,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 }
 
 // MemoryCheck checks the memory usage of the node replica
+// true for ok (not out of memory), false for out of memory
 func (nr *NodeReplica) MemoryCheck() bool {
 	// Get the current memory usage
 	currentMemoryUsage := utility.GetCurrentMemoryUsage()
@@ -639,8 +640,8 @@ func (nr *NodeReplica) MemoryCheck() bool {
 
 	// We compare it with the MaxMemoryThreshold set in Config
 	if memoryUsagePercentage > float64(nr.Config.MaxMemoryThreshold) {
-		return true
+		return false
 	}
 
-	return false
+	return true
 }

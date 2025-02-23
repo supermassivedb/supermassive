@@ -345,7 +345,7 @@ func TestServerPing(t *testing.T) {
 		t.Fatalf("Failed to connect to server: %v", err)
 	}
 
-	// We authenticate
+	// We ping
 	_, err = conn.Write([]byte(fmt.Sprintf("PING\r\n")))
 	if err != nil {
 		conn.Close()
