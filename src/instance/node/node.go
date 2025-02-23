@@ -45,6 +45,7 @@ import (
 	"supermassive/network/server"
 	"supermassive/storage/hashtable"
 	"supermassive/storage/pager"
+	"supermassive/utility"
 	"sync"
 	"time"
 )
@@ -58,6 +59,7 @@ const JournalFile = ".journal"
 // Config is the node configurations
 type Config struct {
 	HealthCheckInterval int              `yaml:"health-check-interval"` // Health check interval
+	MaxMemoryThreshold  uint64           `yaml:"max-memory-threshold"`  // Maximum memory threshold, default 75% of system memory
 	ServerConfig        *server.Config   `yaml:"server-config"`         // Node server configs
 	ReadReplicas        []*client.Config `yaml:"read-replicas"`         // Read replica configs
 }
@@ -72,6 +74,7 @@ type Node struct {
 	Storage            *hashtable.HashTable // Is the storage for the node
 	Journal            *journal.Journal     // Is the journal for the node
 	Lock               *sync.RWMutex        // Is the lock for the node
+	MaxMemory          uint64               // Is the maximum memory for the system
 }
 
 // ReplicaConnection is the connection to a read replica
@@ -99,7 +102,12 @@ func New(logger *slog.Logger, sharedKey string) (*Node, error) {
 		return nil, errors.New("shared key is required")
 	}
 
-	return &Node{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}}, nil
+	maxMem, err := utility.GetMaxMemory()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Node{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}, MaxMemory: maxMem}, nil
 }
 
 // Open opens a new node instance
@@ -228,6 +236,7 @@ func createDefaultConfigFile(wd string) (*Config, error) {
 
 	config := &Config{
 		HealthCheckInterval: 2,
+		MaxMemoryThreshold:  75,
 		ServerConfig: &server.Config{
 			Address:     "localhost:4001",
 			UseTLS:      false,
@@ -404,6 +413,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		case strings.HasPrefix(string(command), "PUT"):
 			if !authenticated {
 				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			if h.Node.MemoryCheck() == false {
+				// We are out of memory
+				_, err = conn.Write([]byte("ERR out of memory\r\n"))
 				if err != nil {
 					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
@@ -872,4 +891,20 @@ func (n *Node) relayToReplicas(command string) {
 			}
 		}
 	}
+}
+
+// MemoryCheck checks the memory usage of the node
+func (n *Node) MemoryCheck() bool {
+	// Get the current memory usage
+	currentMemoryUsage := utility.GetCurrentMemoryUsage()
+
+	// Calculate the percentage of current memory usage relative to n.MaxMemory
+	memoryUsagePercentage := (float64(currentMemoryUsage) / float64(n.MaxMemory)) * 100
+
+	// We compare it with the MaxMemoryThreshold set in Config
+	if memoryUsagePercentage > float64(n.Config.MaxMemoryThreshold) {
+		return true
+	}
+
+	return false
 }

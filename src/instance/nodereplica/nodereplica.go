@@ -42,6 +42,7 @@ import (
 	"supermassive/journal"
 	"supermassive/network/server"
 	"supermassive/storage/hashtable"
+	"supermassive/utility"
 	"sync"
 	"time"
 )
@@ -54,7 +55,8 @@ const JournalFile = ".journal"
 
 // Config is the node configurations
 type Config struct {
-	ServerConfig *server.Config `yaml:"server-config"` // Node replica server configs
+	MaxMemoryThreshold uint64         `yaml:"max-memory-threshold"` // Max memory threshold for the node replica
+	ServerConfig       *server.Config `yaml:"server-config"`        // Node replica server configs
 }
 
 // NodeReplica is the main struct for the node replica
@@ -66,6 +68,8 @@ type NodeReplica struct {
 	Storage   *hashtable.HashTable // Is the storage for the node replica
 	Journal   *journal.Journal     // Is the journal for the node replica
 	Lock      *sync.RWMutex        // Is the lock for the node replica
+	MaxMemory uint64               // Is the max memory for the system
+
 }
 
 // ServerConnectionHandler is the handler for the server connections
@@ -85,7 +89,12 @@ func New(logger *slog.Logger, sharedKey string) (*NodeReplica, error) {
 		return nil, errors.New("shared key is required")
 	}
 
-	return &NodeReplica{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}}, nil
+	maxMem, err := utility.GetMaxMemory()
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeReplica{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}, MaxMemory: maxMem}, nil
 }
 
 // Open opens a new node replica instance
@@ -398,6 +407,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				continue
 			}
 
+			if h.NodeReplica.MemoryCheck() == false {
+				// We are out of memory
+				_, err = conn.Write([]byte("ERR out of memory\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			// We put the data
 			key := strings.Split(string(command), " ")[1]
 			value := strings.Join(strings.Split(string(command), " ")[2:], " ")
@@ -601,4 +620,20 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		}
 
 	}
+}
+
+// MemoryCheck checks the memory usage of the node replica
+func (nr *NodeReplica) MemoryCheck() bool {
+	// Get the current memory usage
+	currentMemoryUsage := utility.GetCurrentMemoryUsage()
+
+	// Calculate the percentage of current memory usage relative to nr.MaxMemory
+	memoryUsagePercentage := (float64(currentMemoryUsage) / float64(nr.MaxMemory)) * 100
+
+	// We compare it with the MaxMemoryThreshold set in Config
+	if memoryUsagePercentage > float64(nr.Config.MaxMemoryThreshold) {
+		return true
+	}
+
+	return false
 }
