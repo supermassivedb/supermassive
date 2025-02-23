@@ -22,15 +22,17 @@ For testing purposes start cluster with ``--local`` to start with no user authen
 You can use TLS, configure in your yaml configuration files.  A cluster can be started with TLS and so can other instance types.
 If nodes and their replicas are set to use TLS make sure to configure client connections to these nodes to be using TLS.
 
-In production use ``--local=false`` and provide ``--user`` and ``--password``.  When accessing through a client like netcat you now need to authenticate with ``AUTH user\0password``.
+When starting a cluster instance you provide a `--username` and `--password`.  When accessing through a client like netcat you now need to authenticate with `AUTH user\0password`.
+
 The `user\0password` should be encoded in base64.
 ```bash
 $ ( echo -n "AUTH " && echo -n $'user\0password' | base64 ) | nc -C localhost 4000
 OK authenticated
 ```
 
+`-C` is used for CRLF line endings.  This is required for the protocol.
+
 ```bash
-$ nc -C localhost 4000
 PUT key1 value1
 OK key-value written
 
