@@ -26,10 +26,8 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - [ ] Replica unit and integration tests
 
 ## Example
-For testing purposes start cluster with ``--local`` to start with no user authentication.
 
-You can use TLS, configure in your yaml configuration files.  A cluster can be started with TLS and so can other instance types.
-If nodes and their replicas are set to use TLS make sure to configure client connections to these nodes to be using TLS.
+You can use TLS for your client-cluster communcation and cluster-node node-replica communication.  A cluster can be started with TLS and so can other instance types based on configuration files.
 
 When starting a cluster instance you provide a `--username` and `--password`.  When accessing through a client like netcat you now need to authenticate with `AUTH user\0password`.
 
