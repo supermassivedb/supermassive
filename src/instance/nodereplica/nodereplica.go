@@ -43,7 +43,10 @@ import (
 	"time"
 )
 
+// ConfigFile is the node replica configuration file
 const ConfigFile = ".nodereplica"
+
+// JournalFile is the node replica journal file
 const JournalFile = ".journal"
 
 // Config is the node configurations

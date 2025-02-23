@@ -48,7 +48,10 @@ import (
 	"time"
 )
 
+// ConfigFile is the node configuration file
 const ConfigFile = ".node"
+
+// JournalFile is the journal file for this node
 const JournalFile = ".journal"
 
 // Config is the node configurations
