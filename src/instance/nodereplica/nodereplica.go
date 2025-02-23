@@ -198,6 +198,7 @@ func createDefaultConfigFile(wd string) (*Config, error) {
 	defer f.Close()
 
 	config := &Config{
+		MaxMemoryThreshold: 75,
 		ServerConfig: &server.Config{
 			Address:     "localhost:4002",
 			UseTLS:      false,
