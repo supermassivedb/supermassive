@@ -32,6 +32,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"log/slog"
@@ -45,6 +46,7 @@ import (
 	"time"
 )
 
+// ConfigFile is cluster config name
 const ConfigFile = ".cluster"
 
 // The cluster runs a server and has many client connections to nodes and their read replicas.
@@ -70,6 +72,8 @@ type Cluster struct {
 	Logger          *slog.Logger      // Is the logger for the cluster
 	SharedKey       string            // Is the shared key for the cluster
 	Sequence        atomic.Int32      // Is the sequence for writes to primary nodes
+	Username        string            // Is the cluster user username to access through client
+	Password        string            // Is the cluster user password to access through client
 }
 
 // NodeConnection is the connection to a node
@@ -97,8 +101,8 @@ type ServerConnectionHandler struct {
 }
 
 // New creates a new cluster instance
-func New(logger *slog.Logger, sharedKey string) *Cluster {
-	return &Cluster{Logger: logger, SharedKey: sharedKey}
+func New(logger *slog.Logger, sharedKey, username, password string) *Cluster {
+	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password}
 }
 
 // Open opens a new cluster instance
@@ -416,6 +420,8 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	buffer := make([]byte, h.BufferSize)
 	var tempBuffer []byte // Temporary buffer to store data (larger than buffer)
 
+	authenticated := false // Whether client is authenticated to the cluster
+
 	for {
 		_ = conn.SetReadDeadline(time.Time{})
 		n, err := conn.Read(buffer)
@@ -444,7 +450,57 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		h.Cluster.Logger.Info("received command", "command", string(command))
 
 		switch {
+		case strings.HasPrefix(string(command), "AUTH"):
+			// We check if the client is already authenticated
+			if authenticated {
+				_, err = conn.Write([]byte("ERR already authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
 
+			// We get base64 encoded "username\0password"
+			credentials := bytes.Split(command, []byte(" "))[1]
+			decoded, err := base64.StdEncoding.DecodeString(string(credentials))
+			if err != nil {
+				_, err = conn.Write([]byte("ERR invalid credentials\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// We split the decoded credentials into username and password
+			creds := bytes.Split(decoded, []byte("\x00"))
+			if len(creds) != 2 {
+				_, err = conn.Write([]byte("ERR invalid credentials\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// We check if the username and password match
+			if string(creds[0]) != h.Cluster.Username || string(creds[1]) != h.Cluster.Password {
+				_, err = conn.Write([]byte("ERR invalid credentials\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// We authenticate the client
+			authenticated = true
+			_, err = conn.Write([]byte("OK authenticated\r\n"))
+			if err != nil {
+				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
 		case strings.HasPrefix(string(command), "PING"):
 			_, err = conn.Write([]byte("OK PONG\r\n"))
 			if err != nil {

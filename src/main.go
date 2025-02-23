@@ -39,14 +39,11 @@ import (
 	"syscall"
 )
 
-// We PUT, DEL, GET data
-// When we PUT we select a random primary node to store the data
-// On GET we check all nodes for the data
-// We sort by the most recent timestamp, the rest get deleted
-// On DEL we delete from all nodes
 func main() {
 	instanceTypeFlag := flag.String("instance-type", "cluster", "cluster|node|node-replica")
 	sharedKeyFlag := flag.String("shared-key", "", "shared key for cluster to node, node to node replica communication.")
+	usernameFlag := flag.String("username", "", "username for client to cluster communication.")
+	passwordFlag := flag.String("password", "", "password for client to cluster communication.")
 
 	flag.Parse()
 
@@ -73,7 +70,7 @@ func main() {
 	case "cluster":
 		logger.Info("Starting cluster instance")
 
-		c := cluster.New(logger, *sharedKeyFlag)
+		c := cluster.New(logger, *sharedKeyFlag, *usernameFlag, *passwordFlag)
 		go func() {
 			err := c.Open()
 			if err != nil {
