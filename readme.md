@@ -194,3 +194,9 @@ A primary after connected to replica will send a `STARTSYNC`, a replica will the
 4. Replica writes pages to its journal
 5. PRIMARY is done sending pages to replica once `SYNCDONE` is sent to replica
 6. Primary and replica are now in sync
+
+## Contributing
+To contribute to SuperMassive simply fork, make your changes, and submit a pull request with a detailed description on why, what changes were made.
+
+## License
+BSD-3-Clause
