@@ -67,6 +67,7 @@ type Config struct {
 // Node is the main struct for the node
 type Node struct {
 	Config             *Config              // Is the node configuration
+	ConfigLock         *sync.RWMutex        // Is the lock for the config file
 	Server             *server.Server       // Is the node server
 	Logger             *slog.Logger         // Is the logger for the node
 	ReplicaConnections []*ReplicaConnection // Are the connections to read replicas
@@ -75,14 +76,14 @@ type Node struct {
 	Journal            *journal.Journal     // Is the journal for the node
 	Lock               *sync.RWMutex        // Is the lock for the node
 	MaxMemory          uint64               // Is the maximum memory for the system
+	Wd                 string               // Is the working directory for the node
 }
 
 // ReplicaConnection is the connection to a read replica
 type ReplicaConnection struct {
-	Client   *client.Client       // Is the connection to the master node
-	Replicas []*ReplicaConnection // Are the connections to the read replicas
-	Health   bool                 // Is the health status of the node
-	Context  context.Context      // Is the context for the node
+	Client  *client.Client  // Is the connection to the master node
+	Health  bool            // Is the health status of the node
+	Context context.Context // Is the context for the node
 }
 
 // ServerConnectionHandler is the handler for the server connections
@@ -107,7 +108,7 @@ func New(logger *slog.Logger, sharedKey string) (*Node, error) {
 		return nil, err
 	}
 
-	return &Node{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}, MaxMemory: maxMem}, nil
+	return &Node{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}, MaxMemory: maxMem, ConfigLock: &sync.RWMutex{}}, nil
 }
 
 // Open opens a new node instance
@@ -140,6 +141,7 @@ func (n *Node) Open() error {
 
 	// Set the node configuration
 	n.Config = conf
+	n.Wd = wd
 
 	// We create a new server
 	n.Server = server.New(n.Config.ServerConfig, n.Logger, &ServerConnectionHandler{
@@ -691,6 +693,31 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 
+		case strings.HasPrefix(string(command), "RCNF"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			err = h.Node.ReloadConfig()
+			if err != nil {
+				_, err = conn.Write([]byte("ERR reload error\r\n"))
+				if err != nil {
+					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+			}
+
+			_, err = conn.Write([]byte("OK configs reloaded\r\n"))
+			if err != nil {
+				h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
+
 		default:
 			_, err = conn.Write([]byte("ERR unknown command\r\n"))
 			if err != nil {
@@ -943,4 +970,72 @@ func (n *Node) MemoryCheck() bool {
 	}
 
 	return true
+}
+
+// ReloadConfig reloads node config file
+func (n *Node) ReloadConfig() error {
+	n.ConfigLock.Lock()
+	defer n.ConfigLock.Unlock()
+	// We open the existing config file
+	config, err := openExistingConfigFile(n.Wd)
+	if err != nil {
+		return err
+	}
+
+	// We update the node config
+	n.Config = config
+
+	// We update the server config
+	n.Server.Config = config.ServerConfig
+
+	for _, replicaConfig := range config.ReadReplicas {
+		// We check if the replica connection already exists
+		var exists bool
+		for _, replicaConn := range n.ReplicaConnections {
+			if replicaConn.Client.Config.ServerAddress == replicaConfig.ServerAddress {
+				exists = true
+				break
+			}
+		}
+
+		if exists {
+			continue
+		}
+
+		replicaConn := &ReplicaConnection{
+			Client: client.New(replicaConfig, n.Logger),
+		}
+
+		n.ReplicaConnections = append(n.ReplicaConnections, replicaConn)
+	}
+
+	// Now we find what replicas to remove
+	var remove []int
+	for i, replicaConn := range n.ReplicaConnections {
+		var found bool
+		for _, replicaConfig := range config.ReadReplicas {
+			if replicaConfig.ServerAddress == replicaConn.Client.Config.ServerAddress {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			remove = append(remove, i)
+		}
+	}
+
+	// We remove the replicas
+	for _, i := range remove {
+		// We close the client
+		if n.ReplicaConnections[i].Client != nil {
+			err = n.ReplicaConnections[i].Client.Close()
+			if err != nil {
+				return err
+			}
+		}
+		n.ReplicaConnections = append(n.ReplicaConnections[:i], n.ReplicaConnections[i+1:]...)
+	}
+
+	return nil
 }

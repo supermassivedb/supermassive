@@ -62,15 +62,16 @@ type Config struct {
 
 // NodeReplica is the main struct for the node replica
 type NodeReplica struct {
-	Config    *Config              // Is the node replica configuration
-	Server    *server.Server       // Is the node replica server
-	Logger    *slog.Logger         // Is the logger for the node replica
-	SharedKey string               // Is the shared key for the node replica
-	Storage   *hashtable.HashTable // Is the storage for the node replica
-	Journal   *journal.Journal     // Is the journal for the node replica
-	Lock      *sync.RWMutex        // Is the lock for the node replica
-	MaxMemory uint64               // Is the max memory for the system
-
+	Config     *Config              // Is the node replica configuration
+	Server     *server.Server       // Is the node replica server
+	Logger     *slog.Logger         // Is the logger for the node replica
+	SharedKey  string               // Is the shared key for the node replica
+	Storage    *hashtable.HashTable // Is the storage for the node replica
+	Journal    *journal.Journal     // Is the journal for the node replica
+	Lock       *sync.RWMutex        // Is the lock for the node replica
+	MaxMemory  uint64               // Is the max memory for the system
+	ConfigLock *sync.RWMutex        // Is the lock for the config
+	Wd         string               // Is the working directory
 }
 
 // ServerConnectionHandler is the handler for the server connections
@@ -95,7 +96,7 @@ func New(logger *slog.Logger, sharedKey string) (*NodeReplica, error) {
 		return nil, err
 	}
 
-	return &NodeReplica{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}, MaxMemory: maxMem}, nil
+	return &NodeReplica{Logger: logger, SharedKey: sharedKey, Storage: hashtable.New(), Lock: &sync.RWMutex{}, MaxMemory: maxMem, ConfigLock: &sync.RWMutex{}}, nil
 }
 
 // Open opens a new node replica instance
@@ -128,6 +129,7 @@ func (nr *NodeReplica) Open() error {
 
 	// Set the node replica configuration
 	nr.Config = conf
+	nr.Wd = wd
 
 	// We create a new server
 	nr.Server = server.New(nr.Config.ServerConfig, nr.Logger, &ServerConnectionHandler{
@@ -660,6 +662,31 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				return
 			}
 
+		case strings.HasPrefix(string(command), "RCNF"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			err = h.NodeReplica.ReloadConfig()
+			if err != nil {
+				_, err = conn.Write([]byte("ERR reload error\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+			}
+
+			_, err = conn.Write([]byte("OK configs reloaded\r\n"))
+			if err != nil {
+				h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
+
 		default:
 			_, err = conn.Write([]byte("ERR unknown command\r\n"))
 			if err != nil {
@@ -686,4 +713,23 @@ func (nr *NodeReplica) MemoryCheck() bool {
 	}
 
 	return true
+}
+
+// ReloadConfig reloads node replica config file
+func (nr *NodeReplica) ReloadConfig() error {
+	nr.ConfigLock.Lock()
+	defer nr.ConfigLock.Unlock()
+	// We open the existing config file
+	config, err := openExistingConfigFile(nr.Wd)
+	if err != nil {
+		return err
+	}
+
+	// We update the node replica config
+	nr.Config = config
+
+	// We update the server config
+	nr.Server.Config = config.ServerConfig
+
+	return nil
 }

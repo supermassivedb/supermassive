@@ -221,12 +221,8 @@ MEMORY
 REPLICA localhost:4002 -- Will list primary, then all replica stats under each primary
 .. more
 
-------- SOON TO BE IMPLEMENTED (MAY CHANGE) -------
-NNDE host:port -- add a node to the cluster
-
-DNDE host:port -- remove a node/ node replica from the cluster, if a node replica it is removed from the primary node
-
-NNRE host:port primary-host:port -- add a node replica to the cluster for a primary node
+RCNF -- reload configuration files, will reload for entire cluster, nodes, and replicas.  Good when you want to change configurations without restarting the cluster.
+OK configs reloaded
 
 ```
 

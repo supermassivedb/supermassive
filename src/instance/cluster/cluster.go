@@ -67,6 +67,7 @@ type NodeConfig struct {
 // Cluster is the main struct for the cluster
 type Cluster struct {
 	Config          *Config           // Is the cluster configuration
+	ConfigLock      *sync.RWMutex     // Is the config lock
 	Server          *server.Server    // Is the cluster server
 	NodeConnections []*NodeConnection // Are the connections to nodes
 	Logger          *slog.Logger      // Is the logger for the cluster
@@ -74,6 +75,7 @@ type Cluster struct {
 	Sequence        atomic.Int32      // Is the sequence for writes to primary nodes
 	Username        string            // Is the cluster user username to access through client
 	Password        string            // Is the cluster user password to access through client
+	Wd              string            // Is the working directory
 }
 
 // NodeConnection is the connection to a node
@@ -118,7 +120,7 @@ func New(logger *slog.Logger, sharedKey, username, password string) (*Cluster, e
 		return nil, fmt.Errorf("logger is required")
 	}
 
-	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password, Sequence: atomic.Int32{}}, nil
+	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password, Sequence: atomic.Int32{}, ConfigLock: &sync.RWMutex{}}, nil
 }
 
 // Open opens a new cluster instance
@@ -151,6 +153,8 @@ func (c *Cluster) Open() error {
 
 	// Set the cluster configuration
 	c.Config = conf
+
+	c.Wd = wd
 
 	// We create a new server
 	c.Server = server.New(c.Config.ServerConfig, c.Logger, &ServerConnectionHandler{
@@ -666,7 +670,30 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 				return
 			}
-		case strings.HasPrefix()
+		case strings.HasPrefix(string(command), "RCNF"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			err = h.Cluster.ReloadConfig()
+			if err != nil {
+				_, err = conn.Write([]byte("ERR reload error\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+			}
+
+			_, err = conn.Write([]byte("OK configs reloaded\r\n"))
+			if err != nil {
+				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
 		default:
 			_, err = conn.Write([]byte("ERR unknown command\r\n"))
 			if err != nil {
@@ -1343,4 +1370,91 @@ func (c *Cluster) WriteToNode(data []byte) ([]byte, error) {
 
 	return response, nil
 
+}
+
+// ReloadConfig reloads a config file and propagates updates the cluster and all nodes in the chain
+func (c *Cluster) ReloadConfig() error {
+	c.ConfigLock.Lock()
+	defer c.ConfigLock.Unlock()
+	// We open the existing config file
+	config, err := openExistingConfigFile(c.Wd)
+	if err != nil {
+		return err
+	}
+
+	// We update the cluster config
+	c.Config = config
+
+	// We update the server config
+	c.Server.Config = config.ServerConfig
+
+	for _, nodeConfig := range config.NodeConfigs {
+		// We check if the node connection already exists
+		var exists bool
+		for _, nodeConn := range c.NodeConnections {
+			if nodeConn.Config.Node.ServerAddress == nodeConfig.Node.ServerAddress {
+				exists = true
+				break
+			}
+		}
+
+		if exists {
+			continue
+		}
+
+		nodeConn := &NodeConnection{
+			Config: nodeConfig,
+		}
+
+		c.NodeConnections = append(c.NodeConnections, nodeConn)
+	}
+
+	// Now we find what nodes to remove
+	var remove []int
+	for i, nodeConn := range c.NodeConnections {
+		var found bool
+		for _, nodeConfig := range config.NodeConfigs {
+			if nodeConn.Config.Node.ServerAddress == nodeConfig.Node.ServerAddress {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			remove = append(remove, i)
+		}
+	}
+
+	// We remove the nodes
+	for _, i := range remove {
+		// We close the client
+		if c.NodeConnections[i].Client != nil {
+			err = c.NodeConnections[i].Client.Close()
+			if err != nil {
+				return err
+			}
+		}
+		c.NodeConnections = append(c.NodeConnections[:i], c.NodeConnections[i+1:]...)
+	}
+
+	// Send RELOAD command to all nodes
+	for _, nodeConn := range c.NodeConnections {
+		if nodeConn.Health {
+			err = nodeConn.Client.Send(nodeConn.Context, []byte("RCNF\r\n"))
+			if err != nil {
+				return err
+			}
+
+			for _, replicaConn := range nodeConn.Replicas {
+				if replicaConn.Health {
+					err = replicaConn.Client.Send(replicaConn.Context, []byte("RCNF\r\n"))
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
