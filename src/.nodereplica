@@ -1,7 +1,0 @@
-server-config:
-    address: localhost:4002
-    use-tls: false
-    cert-file: /
-    key-file: /
-    read-timeout: 10
-    buffer-size: 1024

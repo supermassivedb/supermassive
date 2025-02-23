@@ -15,7 +15,9 @@ src/supermassive
 supermassive
 .cluster
 .node
-.node-replica
+.nodereplica
+.journal
 src/.node
-src/.node-replica
+src/.nodereplica
 src/.cluster
+src/.journal
