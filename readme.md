@@ -184,6 +184,17 @@ key2 2.6
 
 DECR key2 1.1
 key2 1.5
+
+------- SOON TO BE IMPLEMENTED -------
+
+STATS -- get stats on all nodes in the cluster
+
+NNDE host:port -- add a node to the cluster
+
+DNDE host:port -- remove a node/ node replica from the cluster, if a node replica it is removed from the primary node
+
+NNRE host:port primary-host:port -- add a node replica to the cluster for a primary node
+
 ```
 
 > [!NOTE]
