@@ -70,7 +70,7 @@ key2 1.5
 
 There are NO transactions.  All commands except PUT, PING are ran in parallel.  PUT selects 1 node based on current sequence and writes to it.
 On get, we always return the most recent value of a key.  If there are multiple values for a key only 1 value lives on if this occurs, rest are deleted.
-```
+
 
 ## Replica consistency?
 When a replica is down, the primary node will not be able to write to it.  The primary node will continue to write to the other replicas.
