@@ -185,8 +185,6 @@ key2 2.6
 DECR key2 1.1
 key2 1.5
 
-------- SOON TO BE IMPLEMENTED -------
-
 STAT -- get stats on all nodes in the cluster
 OK
 PRIMARY localhost:4001 -- get stats on a specific node
@@ -223,7 +221,7 @@ MEMORY
 REPLICA localhost:4002 -- Will list primary, then all replica stats under each primary
 .. more
 
-
+------- SOON TO BE IMPLEMENTED (MAY CHANGE) -------
 NNDE host:port -- add a node to the cluster
 
 DNDE host:port -- remove a node/ node replica from the cluster, if a node replica it is removed from the primary node

@@ -666,6 +666,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 				return
 			}
+		case strings.HasPrefix()
 		default:
 			_, err = conn.Write([]byte("ERR unknown command\r\n"))
 			if err != nil {
