@@ -462,9 +462,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		command := tempBuffer
 		tempBuffer = nil // Reset the temporary buffer for the next command
 
-		// We log the received command
-		h.Cluster.Logger.Info("received command", "command", string(command))
-
 		switch {
 		case strings.HasPrefix(string(command), "AUTH"):
 			// We check if the client is already authenticated

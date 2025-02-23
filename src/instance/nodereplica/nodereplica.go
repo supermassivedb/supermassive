@@ -266,9 +266,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 
 		command = bytes.TrimSuffix(command, []byte("\r\n"))
 
-		// We print and send back the command
-		h.NodeReplica.Logger.Info("received command", "command", string(command))
-
 		switch {
 		case strings.HasPrefix(string(command), "NAUTH"):
 
@@ -631,6 +628,38 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 			return
+		case strings.HasPrefix(string(command), "STAT"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			storageStats := h.NodeReplica.Journal.Pager.Stats()
+			hashtableStats := h.NodeReplica.Storage.Stats()
+
+			// We create one byte array for response
+			var response []byte
+			response = append(response, []byte("OK\r\n")...)
+			response = append(response, []byte(fmt.Sprintf("DISK\r\n"))...)
+			for k, v := range storageStats {
+				response = append(response, []byte(fmt.Sprintf("\t%s %v\r\n", k, v))...)
+			}
+
+			response = append(response, []byte(fmt.Sprintf("MEMORY\r\n"))...)
+			for k, v := range hashtableStats {
+				response = append(response, []byte(fmt.Sprintf("\t%s %v\r\n", k, v))...)
+			}
+
+			_, err = conn.Write(response)
+			if err != nil {
+				h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
+			}
+
 		default:
 			_, err = conn.Write([]byte("ERR unknown command\r\n"))
 			if err != nil {
