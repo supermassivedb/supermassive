@@ -17,7 +17,7 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - **Fault-tolerant** Replication and fail-over are supported. If a node goes down, the cluster will continue to function.
 - **Self-healing** Automatic data recovery.  A node can recover from a journal.  A node replica can recover from a primary node via a check point like algorithm.
 - **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR, REGX
-- **Async Journal** Operations are written to a journal asynchronously.  This allows for fast writes and recovery.
+- **Async Node Journal** Operations are written to a journal asynchronously.  This allows for fast writes and recovery.
 - **Multi-platform** Linux, Windows, MacOS
 
 ## Getting Started
