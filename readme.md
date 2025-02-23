@@ -187,7 +187,7 @@ key2 1.5
 
 ------- SOON TO BE IMPLEMENTED -------
 
-STATS -- get stats on all nodes in the cluster
+STAT -- get stats on all nodes in the cluster
 
 NNDE host:port -- add a node to the cluster
 
