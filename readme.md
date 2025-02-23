@@ -26,7 +26,7 @@ When starting a cluster instance you provide a `--username` and `--password`.  W
 
 The `user\0password` should be encoded in base64.
 ```bash
-$ ( echo -n "AUTH " && echo -n $'user\0password' | base64 ) | nc -C localhost 4000
+(echo -n "AUTH " && echo -n $"username\\0password" | base64 && cat) | nc -C localhost 4000
 OK authenticated
 ```
 

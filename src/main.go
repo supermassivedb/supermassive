@@ -42,6 +42,8 @@ import (
 func main() {
 	instanceTypeFlag := flag.String("instance-type", "cluster", "cluster|node|node-replica")
 	sharedKeyFlag := flag.String("shared-key", "", "shared key for cluster to node, node to node replica communication.")
+
+	// If cluster instance
 	usernameFlag := flag.String("username", "", "username for client to cluster communication.")
 	passwordFlag := flag.String("password", "", "password for client to cluster communication.")
 
@@ -69,6 +71,12 @@ func main() {
 	switch *instanceTypeFlag {
 	case "cluster":
 		logger.Info("Starting cluster instance")
+
+		// Check username and password
+		if *usernameFlag == "" || *passwordFlag == "" {
+			logger.Error("Username and password are required for cluster instance")
+			os.Exit(1)
+		}
 
 		c := cluster.New(logger, *sharedKeyFlag, *usernameFlag, *passwordFlag)
 		go func() {

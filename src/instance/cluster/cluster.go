@@ -462,7 +462,11 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 			// We get base64 encoded "username\0password"
-			credentials := bytes.Split(command, []byte(" "))[1]
+			credentials := bytes.TrimSuffix(bytes.Split(command, []byte(" "))[1], []byte("\r\n"))
+
+			// print credentials
+			fmt.Println(string(credentials))
+
 			decoded, err := base64.StdEncoding.DecodeString(string(credentials))
 			if err != nil {
 				_, err = conn.Write([]byte("ERR invalid credentials\r\n"))
@@ -474,7 +478,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			}
 
 			// We split the decoded credentials into username and password
-			creds := bytes.Split(decoded, []byte("\x00"))
+			creds := bytes.Split(decoded, []byte("\\0"))
 			if len(creds) != 2 {
 				_, err = conn.Write([]byte("ERR invalid credentials\r\n"))
 				if err != nil {
@@ -501,6 +505,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 				return
 			}
+			continue
 		case strings.HasPrefix(string(command), "PING"):
 			_, err = conn.Write([]byte("OK PONG\r\n"))
 			if err != nil {
