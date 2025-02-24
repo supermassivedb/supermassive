@@ -21,35 +21,42 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Go into SRC directory
-        run: cd src
-
       - name: Install dependencies
         run: go mod tidy
+        working-directory: src
 
       - name: Run utility tests
         run: go test ./utility -v
+        working-directory: src
 
       - name: Run pager tests
         run: go test ./storage/pager -v
+        working-directory: src
 
       - name: Run hashtable tests
         run: go test ./storage/hashtable -v
+        working-directory: src
 
       - name: Run client network tests
         run: go test ./network/client -v
+        working-directory: src
 
       - name: Run server network tests
         run: go test ./network/server -v
+        working-directory: src
 
       - name: Run journal tests
         run: go test ./journal -v
+        working-directory: src
 
       - name: Run node replica tests
         run: go test ./instance/nodereplica -v
+        working-directory: src
 
       - name: Run node primary tests
         run: go test ./instance/node -v
+        working-directory: src
 
       - name: Run cluster tests
         run: go test ./instance/cluster -v
+        working-directory: src
