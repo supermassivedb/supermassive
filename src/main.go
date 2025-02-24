@@ -110,7 +110,7 @@ func main() {
 		}
 
 		go func() {
-			err := n.Open()
+			err := n.Open(nil)
 			if err != nil {
 				logger.Error("Error starting node instance", err)
 				os.Exit(1)
@@ -134,7 +134,7 @@ func main() {
 		}
 
 		go func() {
-			err := nr.Open()
+			err := nr.Open(nil)
 			if err != nil {
 				logger.Error("Error starting node replica instance", err)
 				os.Exit(1)

@@ -1416,5 +1416,327 @@ read-replicas:
 // then we close the replica, and continue to write commands to primary.  After we turn on the replica, we expect the replica to have the same data
 // after sync.
 func TestServerReplicaSync(t *testing.T) {
+	var replica *nodereplica.NodeReplica
 
+	go func() {
+		// We make temp dir
+		if err := os.Mkdir(".replica_test/", 0755); err != nil {
+			return
+		}
+
+		var err error
+		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+		replica, err = nodereplica.New(logger, "test-key")
+		if err != nil {
+			return
+		}
+
+		replica.Config = &nodereplica.Config{
+			ServerConfig: &server.Config{
+				Address:     "localhost:4007",
+				UseTLS:      false,
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+			MaxMemoryThreshold: 75,
+		}
+
+		dir := ".replica_test/"
+
+		// Marhsal config into .replica_test/
+		yamlRaw, err := yaml.Marshal(replica.Config)
+		if err != nil {
+			t.Errorf("Failed to marshal config: %v", err)
+			return
+		}
+
+		err = os.WriteFile(".replica_test/.nodereplica", yamlRaw, 0644)
+		if err != nil {
+			t.Errorf("Failed to write config file: %v", err)
+			return
+		}
+
+		err = replica.Open(&dir)
+		if err != nil {
+			t.Errorf("Failed to open node replica: %v", err)
+			return
+		}
+
+	}()
+
+	time.Sleep(time.Second * 1)
+
+	defer os.RemoveAll(".replica_test/")
+
+	time.Sleep(1 * time.Second)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	primaryConfig := `health-check-interval: 1
+max-memory-threshold: 75
+server-config:
+    address: localhost:4008
+    use-tls: false
+    cert-file: /
+    key-file: /
+    read-timeout: 10
+    buffer-size: 1024
+read-replicas:
+    - server-address: localhost:4007
+      use-tls: false
+      ca-cert-file: /
+      connect-timeout: 5
+      write-timeout: 5
+      read-timeout: 5
+      max-retries: 3
+      retry-wait-time: 1
+      buffer-size: 1024
+`
+
+	// We write primary config
+	err := os.WriteFile(".node", []byte(primaryConfig), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write primary config file: %v", err)
+	}
+
+	// We create a new node primary
+	nr, err := New(logger, "test-key")
+	if err != nil {
+		t.Fatalf("Failed to create node replica: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		err := nr.Open(nil)
+		if err != nil {
+			t.Fatalf("Failed to open node replica: %v", err)
+		}
+	}()
+
+	time.Sleep(3 * time.Second)
+
+	defer os.Remove(".journal")
+	defer os.Remove(".node")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4008")
+	if err != nil {
+		nr.Close()
+		replica.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		replica.Close()
+		t.Fatalf("Failed to connect to server: %v", err)
+
+	}
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("NAUTH %x\r\n", sha256.Sum256([]byte("test-key")))))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		replica.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		replica.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		replica.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	for i := 0; i < 100; i++ {
+		_, err = conn.Write([]byte(fmt.Sprintf("PUT hello%d world%d\r\n", i, i)))
+		if err != nil {
+			conn.Close()
+			nr.Close()
+			replica.Close()
+			t.Fatalf("Failed to write key-value: %v", err)
+		}
+
+		buf = make([]byte, 1024)
+
+		n, err = conn.Read(buf)
+		if err != nil {
+			conn.Close()
+			nr.Close()
+			replica.Close()
+			t.Fatalf("Failed to read response: %v", err)
+		}
+
+		if string(buf[:n]) != "OK key-value written\r\n" {
+			conn.Close()
+			nr.Close()
+			replica.Close()
+			t.Fatalf("Expected 'OK key-value written', got %s", string(buf[:n]))
+		}
+	}
+
+	nr.ReplicaConnections[0].Client.Close()
+	// Now we close the replica
+	replica.Close()
+
+	// Now we add more data to the primary
+	for i := 100; i < 200; i++ {
+		_, err = conn.Write([]byte(fmt.Sprintf("PUT hello%d world%d\r\n", i, i)))
+		if err != nil {
+			conn.Close()
+			nr.Close()
+			replica.Close()
+			t.Fatalf("Failed to write key-value: %v", err)
+		}
+
+		buf = make([]byte, 1024)
+
+		n, err = conn.Read(buf)
+		if err != nil {
+			conn.Close()
+			nr.Close()
+			replica.Close()
+			t.Fatalf("Failed to read response: %v", err)
+		}
+
+		if string(buf[:n]) != "OK key-value written\r\n" {
+			conn.Close()
+			nr.Close()
+			replica.Close()
+			t.Fatalf("Expected 'OK key-value written', got %s", string(buf[:n]))
+		}
+	}
+	//
+	// Now we reopen the replica
+	go func() {
+
+		var err error
+		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+		replica, err = nodereplica.New(logger, "test-key")
+		if err != nil {
+			return
+		}
+
+		replica.Config = &nodereplica.Config{
+			ServerConfig: &server.Config{
+				Address:     "localhost:4007",
+				UseTLS:      false,
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+			MaxMemoryThreshold: 75,
+		}
+
+		dir := ".replica_test/"
+
+		// Marhsal config into .replica_test/
+		yamlRaw, err := yaml.Marshal(replica.Config)
+		if err != nil {
+			t.Errorf("Failed to marshal config: %v", err)
+			return
+		}
+
+		err = os.WriteFile(".replica_test/.nodereplica", yamlRaw, 0644)
+		if err != nil {
+			t.Errorf("Failed to write config file: %v", err)
+			return
+		}
+
+		err = replica.Open(&dir)
+		if err != nil {
+			t.Errorf("Failed to open node replica: %v", err)
+			return
+		}
+
+	}()
+
+	time.Sleep(time.Second * 3) // We wait for sync
+
+	// We connect to replica and check if all the data is there
+	tcpAddrRep, err := net.ResolveTCPAddr("tcp4", "localhost:4007")
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	connRep, err := net.DialTCP("tcp", nil, tcpAddrRep)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	// We authenticate
+	_, err = connRep.Write([]byte(fmt.Sprintf("NAUTH %x\r\n", sha256.Sum256([]byte("test-key")))))
+	if err != nil {
+		connRep.Close()
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf = make([]byte, 1024)
+
+	n, err = connRep.Read(buf)
+	if err != nil {
+		connRep.Close()
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		connRep.Close()
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	for i := 0; i < 200; i++ {
+		_, err = connRep.Write([]byte(fmt.Sprintf("GET hello%d\r\n", i)))
+		if err != nil {
+			connRep.Close()
+			conn.Close()
+			nr.Close()
+			t.Fatalf("Failed to get key-value: %v", err)
+		}
+
+		buf = make([]byte, 1024)
+
+		n, err = connRep.Read(buf)
+		if err != nil {
+			connRep.Close()
+			conn.Close()
+			nr.Close()
+			t.Fatalf("Failed to read response: %v", err)
+		}
+
+		if !strings.Contains(string(buf[:n]), fmt.Sprintf("hello%d world%d", i, i)) {
+			connRep.Close()
+			conn.Close()
+			nr.Close()
+			t.Fatalf("Expected 'hello%d world%d', got %s", i, i, string(buf[:n]))
+		}
+	}
+
+	connRep.Close()
+
+	conn.Close()
+	nr.Close()
+	replica.Close()
 }

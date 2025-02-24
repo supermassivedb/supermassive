@@ -21,6 +21,7 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR, REGX
 - **Async Node Journal** Operations are written to a journal asynchronously.  This allows for fast writes and recovery.
 - **Multi-platform** Linux, Windows, MacOS
+- **Thoroughly Tested** Extensive unit and integration tests for different scenarios.  We are always looking for more tests to add. (in-progress)
 
 ## Discord
 Join the SuperMassive Discord server to chat with the maintainers and other users.  We are always looking for feedback, bugs and discussion.
@@ -240,11 +241,11 @@ This is using the journal pages and a specific piece of the protocol
 A primary after connected to replica will send a `STARTSYNC`, a replica will then send a `SYNCFROM pgnum` where pgnum is the last page number in the replica journal.  The primary will then send missing operations to the replica.
 
 **Communication looks like this**
-1. Replica goes online
+1. Replica goes online, primary connects to replica sends `STARTSYNC`
 2. Replica sends `SYNCFROM pgnum` to primary
 3. Primary starts sending pages to replica until it reaches end of its journal
 4. Replica writes pages to its journal
-5. PRIMARY is done sending pages to replica once `SYNCDONE` is sent to replica
+5. PRIMARY is done sending pages to replica once `DONESYNC` is sent to replica
 6. Primary and replica are now in sync
 
 ## All nodes are full?

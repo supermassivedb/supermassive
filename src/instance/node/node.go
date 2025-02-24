@@ -459,11 +459,10 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}()
 
-			// We unlock the node
-			h.Node.Lock.Unlock()
-
 			// We relay to the read replicas
 			h.Node.relayToReplicas(string(command))
+			// We unlock the node
+			h.Node.Lock.Unlock()
 
 			_, err = conn.Write([]byte("OK key-value written\r\n"))
 			if err != nil {
@@ -745,7 +744,9 @@ func (n *Node) backgroundHealthChecks() {
 	for {
 		select {
 		case <-ticker.C:
+
 			for _, replicaConn := range n.ReplicaConnections {
+				n.Lock.RLock()
 				if !replicaConn.Health {
 
 					n.Logger.Warn("node replica is unhealthy", "replica", replicaConn.Client.Config.ServerAddress)
@@ -759,6 +760,7 @@ func (n *Node) backgroundHealthChecks() {
 
 					if err := replicaConn.Client.Connect(replicaConn.Context); err != nil {
 						n.Logger.Warn("node connection error", "error", err)
+						n.Lock.RUnlock()
 						continue
 					}
 
@@ -766,12 +768,14 @@ func (n *Node) backgroundHealthChecks() {
 					err := replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("NAUTH %x\r\n", sharedKeyHash)))
 					if err != nil {
 						n.Logger.Warn("authentication error", "error", err)
+						n.Lock.RUnlock()
 						continue
 					}
 
 					response, err := replicaConn.Client.Receive(replicaConn.Context)
 					if err != nil || string(response) != "OK authenticated\r\n" {
 						n.Logger.Warn("authentication error", "error", err)
+						n.Lock.RUnlock()
 						continue
 					}
 
@@ -781,20 +785,20 @@ func (n *Node) backgroundHealthChecks() {
 					err = replicaConn.Client.Send(replicaConn.Context, []byte("STARTSYNC\r\n"))
 					if err != nil {
 						n.Logger.Warn("sync error", "error", err)
-
+						n.Lock.RUnlock()
 						continue
 					}
 
 					response, err = replicaConn.Client.Receive(replicaConn.Context)
 					if err != nil {
 						n.Logger.Warn("read error", "error", err)
-
+						n.Lock.RUnlock()
 						continue
 					}
 
 					command := strings.TrimSuffix(string(response), "\r\n")
 					if !strings.HasPrefix(command, "SYNCFROM") {
-
+						n.Lock.RUnlock()
 						continue
 					}
 
@@ -804,7 +808,7 @@ func (n *Node) backgroundHealthChecks() {
 						if err != nil {
 							n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
 						}
-
+						n.Lock.RUnlock()
 						continue
 					}
 
@@ -812,17 +816,14 @@ func (n *Node) backgroundHealthChecks() {
 					lastJournalPageInt, err := strconv.Atoi(lastJournalPage)
 					if err != nil {
 						n.Logger.Warn("invalid page number", "error", err)
-
+						n.Lock.RUnlock()
 						continue
 					}
-
-					// Lock the node
-					n.Lock.RLock()
 
 					it, err := pager.NewIteratorAtPage(n.Journal.Pager, lastJournalPageInt)
 					if err != nil {
 						if err.Error() == "invalid start page: must be >= 0" || err.Error() == "start page exceeds maximum pages 0" {
-							err = replicaConn.Client.Send(replicaConn.Context, []byte("SYNCDONE\r\n"))
+							err = replicaConn.Client.Send(replicaConn.Context, []byte("DONESYNC\r\n"))
 							if err != nil {
 								n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
 							}
@@ -858,12 +859,25 @@ func (n *Node) backgroundHealthChecks() {
 							err = replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("INCR %s %s\r\n", e.Key, e.Value)))
 						case journal.DECR:
 							err = replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("DECR %s %s\r\n", e.Key, e.Value)))
-						}
 
+						}
 						if err != nil {
 							n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
 							break
 						}
+
+						// Read response
+						response, err = replicaConn.Client.Receive(replicaConn.Context)
+						if err != nil {
+							n.Logger.Warn("read error", "error", err)
+							break
+						}
+
+						if strings.HasPrefix(string(response), "ERR") {
+							n.Logger.Warn("unexpected response", "response", string(response))
+							break
+						}
+
 					}
 
 					err = replicaConn.Client.Send(replicaConn.Context, []byte("SYNCDONE\r\n"))
@@ -885,13 +899,12 @@ func (n *Node) backgroundHealthChecks() {
 						continue
 					}
 
-					n.Lock.RUnlock()
-
 				} else {
 					// We create a temp connection to the replica using a new client
 					tempClient := client.New(replicaConn.Client.Config, n.Logger)
 					if err := tempClient.Connect(replicaConn.Context); err != nil {
 						n.Logger.Warn("node connection error", "error", err)
+						n.Lock.RUnlock()
 						continue
 					}
 
@@ -899,6 +912,7 @@ func (n *Node) backgroundHealthChecks() {
 					if err != nil {
 						replicaConn.Health = false
 						tempClient.Close()
+						n.Lock.RUnlock()
 						continue
 					}
 
@@ -907,6 +921,7 @@ func (n *Node) backgroundHealthChecks() {
 						n.Logger.Warn("read error", "error", err)
 						replicaConn.Health = false
 						tempClient.Close()
+						n.Lock.RUnlock()
 						continue
 					}
 
@@ -916,6 +931,7 @@ func (n *Node) backgroundHealthChecks() {
 					}
 
 					tempClient.Close()
+					n.Lock.RUnlock()
 
 				}
 
