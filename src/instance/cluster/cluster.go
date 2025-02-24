@@ -66,16 +66,17 @@ type NodeConfig struct {
 
 // Cluster is the main struct for the cluster
 type Cluster struct {
-	Config          *Config           // Is the cluster configuration
-	ConfigLock      *sync.RWMutex     // Is the config lock
-	Server          *server.Server    // Is the cluster server
-	NodeConnections []*NodeConnection // Are the connections to nodes
-	Logger          *slog.Logger      // Is the logger for the cluster
-	SharedKey       string            // Is the shared key for the cluster
-	Sequence        atomic.Int32      // Is the sequence for writes to primary nodes
-	Username        string            // Is the cluster user username to access through client
-	Password        string            // Is the cluster user password to access through client
-	Wd              string            // Is the working directory
+	Config              *Config           // Is the cluster configuration
+	ConfigLock          *sync.RWMutex     // Is the config lock
+	Server              *server.Server    // Is the cluster server
+	NodeConnections     []*NodeConnection // Are the connections to nodes
+	NodeConnectionsLock *sync.RWMutex     // Is the node connections lock
+	Logger              *slog.Logger      // Is the logger for the cluster
+	SharedKey           string            // Is the shared key for the cluster
+	Sequence            atomic.Int32      // Is the sequence for writes to primary nodes
+	Username            string            // Is the cluster user username to access through client
+	Password            string            // Is the cluster user password to access through client
+	Wd                  string            // Is the working directory
 }
 
 // NodeConnection is the connection to a node
@@ -120,7 +121,7 @@ func New(logger *slog.Logger, sharedKey, username, password string) (*Cluster, e
 		return nil, fmt.Errorf("logger is required")
 	}
 
-	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password, Sequence: atomic.Int32{}, ConfigLock: &sync.RWMutex{}}, nil
+	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password, Sequence: atomic.Int32{}, ConfigLock: &sync.RWMutex{}, NodeConnectionsLock: &sync.RWMutex{}}, nil
 }
 
 // Open opens a new cluster instance
@@ -536,6 +537,18 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				continue
 			}
 
+			// We check if there are any primary nodes
+			h.Cluster.NodeConnectionsLock.RLock()
+			if len(h.Cluster.NodeConnections) == 0 {
+				h.Cluster.NodeConnectionsLock.RUnlock()
+				_, err = conn.Write([]byte("ERR no primary nodes available\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			response, err := h.Cluster.WriteToNode(command)
 			if err != nil {
 				_, err = conn.Write([]byte("ERR write error\r\n"))
@@ -554,6 +567,18 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		case strings.HasPrefix(string(command), "GET"):
 			if !authenticated {
 				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// We check if there are any primary nodes
+			h.Cluster.NodeConnectionsLock.RLock()
+			if len(h.Cluster.NodeConnections) == 0 {
+				h.Cluster.NodeConnectionsLock.RUnlock()
+				_, err = conn.Write([]byte("ERR no primary nodes available\r\n"))
 				if err != nil {
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
@@ -585,6 +610,18 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				continue
 			}
 
+			// We check if there are any primary nodes
+			h.Cluster.NodeConnectionsLock.RLock()
+			if len(h.Cluster.NodeConnections) == 0 {
+				h.Cluster.NodeConnectionsLock.RUnlock()
+				_, err = conn.Write([]byte("ERR no primary nodes available\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
 			response, err := h.Cluster.ParallelRegx(command)
 			if err != nil {
 				_, err = conn.Write([]byte("ERR read error\r\n"))
@@ -602,6 +639,18 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		case strings.HasPrefix(string(command), "INCR"):
 			if !authenticated {
 				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// We check if there are any primary nodes
+			h.Cluster.NodeConnectionsLock.RLock()
+			if len(h.Cluster.NodeConnections) == 0 {
+				h.Cluster.NodeConnectionsLock.RUnlock()
+				_, err = conn.Write([]byte("ERR no primary nodes available\r\n"))
 				if err != nil {
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
@@ -628,6 +677,18 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		case strings.HasPrefix(string(command), "DECR"):
 			if !authenticated {
 				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// We check if there are any primary nodes
+			h.Cluster.NodeConnectionsLock.RLock()
+			if len(h.Cluster.NodeConnections) == 0 {
+				h.Cluster.NodeConnectionsLock.RUnlock()
+				_, err = conn.Write([]byte("ERR no primary nodes available\r\n"))
 				if err != nil {
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
@@ -702,11 +763,25 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	}
 }
 
+// clusterStats retrieves basic stats for the cluster
+func (c *Cluster) clusterStats() []byte {
+	response := []byte(fmt.Sprintf("CLUSTER %s\r\n", c.Config.ServerConfig.Address))
+
+	// current sequence n
+	response = append(response, fmt.Sprintf("\tcurrent_sequence %d\r\n", c.Sequence.Load())...)
+	response = append(response, fmt.Sprintf("\tclient_connection_count %d\r\n", c.Server.GetConnCount())...)
+
+	return response
+}
+
 // Stats get stats on the cluster and it's nodes
 func (c *Cluster) Stats() []byte {
 	response := []byte("OK\r\n")
-	// We send a stat command to all nodes and form a response
 
+	// We get the cluster stats
+	response = append(response, c.clusterStats()...)
+
+	// We send a stat command to all nodes and form a response
 	for _, nodeConn := range c.NodeConnections {
 		response = append(response, fmt.Sprintf("PRIMARY %s\r\n", nodeConn.Config.Node.ServerAddress)...)
 		if nodeConn.Health {
