@@ -295,17 +295,17 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 func TestServerAuth(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new cluster
 	nr, err := New(logger, "test-key", "test-user", "test-pass")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create cluster: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open()
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open cluster: %v", err)
 		}
 	}()
 
@@ -360,17 +360,17 @@ func TestServerAuth(t *testing.T) {
 func TestServerPing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new cluster
 	nr, err := New(logger, "test-key", "test-user", "test-pass")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create cluster: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open()
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open cluster: %v", err)
 		}
 	}()
 
@@ -416,6 +416,660 @@ func TestServerPing(t *testing.T) {
 		t.Fatalf("Expected 'OK PONG', got %s", string(buf[:n]))
 	}
 
+	nr.Close()
+
+}
+
+func TestServerPutNoPrimaries(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 2,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4000",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".cluster")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4000")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("PUT hello world\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to write: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "ERR no primary nodes available\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'ERR no primary nodes available', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
+	nr.Close()
+
+}
+
+func TestServerGetNoPrimaries(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 2,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4000",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".cluster")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4000")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("GET hello\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to write: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "ERR no primary nodes available\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'ERR no primary nodes available', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
+	nr.Close()
+
+}
+
+func TestServerDelNoPrimaries(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 2,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4000",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".cluster")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4000")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("DEL hello\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to write: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "ERR no primary nodes available\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'ERR no primary nodes available', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
+	nr.Close()
+
+}
+
+func TestServerRegxNoPrimaries(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 2,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4000",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".cluster")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4000")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("REGX pattern\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to write: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "ERR no primary nodes available\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'ERR no primary nodes available', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
+	nr.Close()
+
+}
+
+func TestServerIncrNoPrimaries(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 2,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4000",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".cluster")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4000")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("INCR n 1\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to write: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "ERR no primary nodes available\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'ERR no primary nodes available', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
+	nr.Close()
+
+}
+
+func TestServerDecrNoPrimaries(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	// We open in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 2,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4000",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	defer os.Remove(".cluster")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4000")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("DECR n 1\r\n")))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to write: %v", err)
+	}
+
+	buf = make([]byte, 1024)
+
+	n, err = conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "ERR no primary nodes available\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'ERR no primary nodes available', got %s", string(buf[:n]))
+	}
+
+	conn.Close()
 	nr.Close()
 
 }

@@ -252,17 +252,17 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 func TestServerAuth(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new node
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
@@ -316,17 +316,17 @@ func TestServerAuth(t *testing.T) {
 func TestServerPing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new node
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
@@ -378,17 +378,17 @@ func TestServerPing(t *testing.T) {
 func TestServerCrud(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new node
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
@@ -508,24 +508,24 @@ func TestServerCrud(t *testing.T) {
 func TestServerIncrDecr(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new node
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
 	time.Sleep(100 * time.Millisecond)
 
 	defer os.Remove(".journal")
-	defer os.Remove(".nodereplica")
+	defer os.Remove(".node")
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4001")
 	if err != nil {
@@ -638,17 +638,17 @@ func TestServerIncrDecr(t *testing.T) {
 func TestServerRegx(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new node
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
@@ -812,17 +812,17 @@ func TestServerRegx(t *testing.T) {
 func TestServerStat(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// We create a new node replica
+	// We create a new node
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
@@ -960,14 +960,14 @@ func TestServerConfigRefresh(t *testing.T) {
 	// We create a new node
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
@@ -1226,14 +1226,14 @@ read-replicas:
 	// We create a new node primary
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
@@ -1503,14 +1503,14 @@ read-replicas:
 	// We create a new node primary
 	nr, err := New(logger, "test-key")
 	if err != nil {
-		t.Fatalf("Failed to create node replica: %v", err)
+		t.Fatalf("Failed to create node: %v", err)
 	}
 
 	// We open in background
 	go func() {
 		err := nr.Open(nil)
 		if err != nil {
-			t.Fatalf("Failed to open node replica: %v", err)
+			t.Fatalf("Failed to open node: %v", err)
 		}
 	}()
 
