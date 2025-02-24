@@ -18,7 +18,7 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 - **Consistency Management** Timestamp-based version control to handle conflicts. The most recent value is always returned, the rest are deleted.
 - **Fault-tolerant** Replication and fail-over are supported. If a node goes down, the cluster will continue to function.
 - **Self-healing** Automatic data recovery.  A node can recover from a journal.  A node replica can recover from a primary node via a check point like algorithm.
-- **Simple Protocol** Simple protocol PUT, GET, DEL, INCR, DECR, REGX
+- **Simple Protocol** Simple protocol `PUT`, `GET`, `DEL`, `INCR`, `DECR`, `REGX`, `STAT`, `RCNF`, `PING`.
 - **Async Node Journal** Operations are written to a journal asynchronously.  This allows for fast writes and recovery.
 - **Multi-platform** Linux, Windows, MacOS
 - **Thoroughly Tested** Extensive unit and integration tests for different scenarios.  We are always looking for more tests to add. (in-progress)
