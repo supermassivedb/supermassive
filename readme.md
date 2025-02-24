@@ -190,8 +190,8 @@ key2 1.5
 STAT -- get stats on all nodes in the cluster
 OK
 CLUSTER localhost:4000
-current_sequence 0
-client_connection_count 1
+    current_sequence 0
+    client_connection_count 1
 PRIMARY localhost:4001 -- get stats on a specific node
 DISK
     sync_enabled true
