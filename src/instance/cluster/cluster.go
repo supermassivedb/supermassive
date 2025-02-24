@@ -441,7 +441,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	buffer := make([]byte, h.BufferSize)
 	var tempBuffer []byte // Temporary buffer to store data (larger than buffer)
 
-	authenticated := true // Whether client is authenticated to the cluster
+	authenticated := false // Whether client is authenticated to the cluster
 
 	for {
 		_ = conn.SetReadDeadline(time.Time{})
