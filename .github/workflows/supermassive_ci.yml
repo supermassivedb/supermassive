@@ -1,0 +1,52 @@
+name: SuperMassive CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.24'
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run utility tests
+        run: go test ./utility -v
+
+      - name: Run pager tests
+        run: go test ./storage/pager -v
+
+      - name: Run hashtable tests
+        run: go test ./storage/hashtable -v
+
+      - name: Run client network tests
+        run: go test ./network/client -v
+
+      - name: Run server network tests
+        run: go test ./network/server -v
+
+      - name: Run journal tests
+        run: go test ./journal -v
+
+      - name: Run node replica tests
+        run: go test ./instance/nodereplica -v
+
+      - name: Run node primary tests
+        run: go test ./instance/node -v
+
+      - name: Run cluster tests
+        run: go test ./instance/cluster -v
