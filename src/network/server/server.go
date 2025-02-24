@@ -174,6 +174,7 @@ func (s *Server) incrementConnCount() {
 	s.ConnMutex.Unlock()
 }
 
+// GetConnCount returns the connection count
 func (s *Server) GetConnCount() int64 {
 	s.ConnMutex.Lock()
 	defer s.ConnMutex.Unlock()

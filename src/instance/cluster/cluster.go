@@ -441,7 +441,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	buffer := make([]byte, h.BufferSize)
 	var tempBuffer []byte // Temporary buffer to store data (larger than buffer)
 
-	authenticated := false // Whether client is authenticated to the cluster
+	authenticated := true // Whether client is authenticated to the cluster
 
 	for {
 		_ = conn.SetReadDeadline(time.Time{})
@@ -563,6 +563,42 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
+			}
+		case strings.HasPrefix(string(command), "DEL"):
+			if !authenticated {
+				_, err = conn.Write([]byte("ERR not authenticated\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			// We check if there are any primary nodes
+			h.Cluster.NodeConnectionsLock.RLock()
+			if len(h.Cluster.NodeConnections) == 0 {
+				h.Cluster.NodeConnectionsLock.RUnlock()
+				_, err = conn.Write([]byte("ERR no primary nodes available\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+				continue
+			}
+
+			response, err := h.Cluster.ParallelDelete(command)
+			if err != nil {
+				_, err = conn.Write([]byte("ERR read error\r\n"))
+				if err != nil {
+					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+					return
+				}
+			}
+
+			_, err = conn.Write(response)
+			if err != nil {
+				h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+				return
 			}
 		case strings.HasPrefix(string(command), "GET"):
 			if !authenticated {
@@ -772,6 +808,98 @@ func (c *Cluster) clusterStats() []byte {
 	response = append(response, fmt.Sprintf("\tclient_connection_count %d\r\n", c.Server.GetConnCount())...)
 
 	return response
+}
+
+// ParallelDelete deletes a key from all primary nodes in parallel
+func (c *Cluster) ParallelDelete(command []byte) ([]byte, error) {
+	// We delete from all primary nodes
+	var response *struct {
+		TimeStamp time.Time
+		Data      []byte
+		Node      *NodeConnection
+	}
+
+	wg := sync.WaitGroup{}
+	lock := sync.Mutex{}
+
+	for _, nodeConn := range c.NodeConnections {
+		if nodeConn.Health {
+
+			wg.Add(1)
+			go func(nodeConn *NodeConnection) {
+				defer wg.Done()
+
+				// We send the command
+				err := nodeConn.Client.Send(nodeConn.Context, command)
+				if err != nil {
+					c.Logger.Warn("write error", "error", err)
+					return
+				}
+
+				// We receive the response
+				rec, err := nodeConn.Client.Receive(nodeConn.Context)
+				if err != nil {
+					c.Logger.Warn("read error", "error", err)
+					return
+				}
+
+				// If OK
+				if bytes.HasPrefix(rec, []byte("OK")) {
+
+					// We parse the received response
+					timestamp := bytes.Split(rec, []byte(" "))[1]
+					data := bytes.Join(bytes.Split(rec, []byte(" "))[2:], []byte(" "))
+
+					responseInner := &struct {
+						TimeStamp time.Time
+						Data      []byte
+						Node      *NodeConnection
+					}{}
+
+					responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestamp))
+					if err != nil {
+						c.Logger.Warn("time parse error", "error", err)
+						return
+					}
+
+					responseInner.Data = data
+					responseInner.Node = nodeConn
+
+					lock.Lock()
+					defer lock.Unlock()
+
+					if response != nil {
+						// We compare the timestamps
+						if response.TimeStamp.After(responseInner.TimeStamp) {
+							// We send a delete command to the primary node
+
+							key := bytes.Split(command, []byte(" "))[1]
+
+							err = response.Node.Client.Send(response.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
+							if err != nil {
+								c.Logger.Warn("write error", "error", err)
+								return
+							}
+
+							_, err := response.Node.Client.Receive(response.Node.Context)
+							if err != nil {
+								c.Logger.Warn("read error", "error", err)
+								return
+							}
+						}
+					}
+				}
+			}(nodeConn)
+		}
+	}
+
+	wg.Wait()
+
+	if response == nil {
+		return []byte("ERR key not found\r\n"), nil
+	}
+
+	return response.Data, nil
 }
 
 // Stats get stats on the cluster and it's nodes
