@@ -35,6 +35,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"gopkg.in/yaml.v3"
+	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -77,6 +78,7 @@ type Cluster struct {
 	Username            string            // Is the cluster user username to access through client
 	Password            string            // Is the cluster user password to access through client
 	Wd                  string            // Is the working directory
+	Lock                *sync.RWMutex     // Is the lock for the cluster
 }
 
 // NodeConnection is the connection to a node
@@ -86,6 +88,7 @@ type NodeConnection struct {
 	Health   bool                 // Is the health status of the node
 	Context  context.Context      // Is the context for the node
 	Config   *NodeConfig          // Is the node configuration
+	Lock     *sync.Mutex          // Is the lock for the node connection
 }
 
 // ReplicaConnection is a connection to a nodes read replica
@@ -94,6 +97,7 @@ type ReplicaConnection struct {
 	Health  bool            // Is the health status of the read replica
 	Context context.Context // Is the context for the read replica
 	Config  *client.Config  // Is the read replica configuration
+	Lock    *sync.Mutex     // Is the lock for the read replica connection
 }
 
 // ServerConnectionHandler is the handler for the server connections
@@ -121,7 +125,7 @@ func New(logger *slog.Logger, sharedKey, username, password string) (*Cluster, e
 		return nil, fmt.Errorf("logger is required")
 	}
 
-	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password, Sequence: atomic.Int32{}, ConfigLock: &sync.RWMutex{}, NodeConnectionsLock: &sync.RWMutex{}}, nil
+	return &Cluster{Logger: logger, SharedKey: sharedKey, Username: username, Password: password, Sequence: atomic.Int32{}, ConfigLock: &sync.RWMutex{}, NodeConnectionsLock: &sync.RWMutex{}, Lock: &sync.RWMutex{}}, nil
 }
 
 // Open opens a new cluster instance
@@ -168,11 +172,13 @@ func (c *Cluster) Open() error {
 	for _, nodeConfig := range c.Config.NodeConfigs {
 		nodeConn := &NodeConnection{
 			Config: nodeConfig,
+			Lock:   &sync.Mutex{},
 		}
 
 		for _, replicaConfig := range nodeConfig.Replicas {
 			replicaConn := &ReplicaConnection{
 				Config: replicaConfig,
+				Lock:   &sync.Mutex{},
 			}
 			nodeConn.Replicas = append(nodeConn.Replicas, replicaConn)
 		}
@@ -202,6 +208,9 @@ func (c *Cluster) backgroundHealthChecks() {
 		select {
 		case <-ticker.C:
 			for _, nodeConn := range c.NodeConnections {
+				// We read lock the node connection
+				nodeConn.Lock.Lock()
+
 				if !nodeConn.Health {
 					c.Logger.Warn("node is unhealthy", "node", nodeConn.Config.Node.ServerAddress)
 					if nodeConn.Context == nil {
@@ -214,12 +223,15 @@ func (c *Cluster) backgroundHealthChecks() {
 					if err := nodeConn.Client.Connect(nodeConn.Context); err != nil {
 						c.Logger.Warn("node connection error", "error", err)
 					} else {
+
 						sharedKeyHash := sha256.Sum256([]byte(c.SharedKey))
+
 						err := nodeConn.Client.Send(nodeConn.Context, []byte(fmt.Sprintf("NAUTH %x\r\n", sharedKeyHash)))
 						if err != nil {
 							c.Logger.Warn("authentication error", "error", err)
 						} else {
 							response, err := nodeConn.Client.Receive(nodeConn.Context)
+							log.Println(string(response))
 							if err != nil || string(response) != "OK authenticated\r\n" {
 								c.Logger.Warn("authentication error", "error", err)
 							} else {
@@ -229,32 +241,40 @@ func (c *Cluster) backgroundHealthChecks() {
 						}
 					}
 				} else {
-					// We ping
-					err := nodeConn.Client.Send(nodeConn.Context, []byte("PING\r\n"))
-					if err != nil {
-						// Mark the node as unhealthy
-						nodeConn.Health = false
-					}
+					// We create a temp connection to the replica using a new client
+					tempClient := client.New(nodeConn.Client.Config, c.Logger)
+					if err := tempClient.Connect(nodeConn.Context); err != nil {
+						c.Logger.Warn("node connection error", "error", err)
+					} else {
 
-					// We read response
-					response, err := nodeConn.Client.Receive(nodeConn.Context)
-					if err != nil {
-						c.Logger.Warn("read error", "error", err)
-						nodeConn.Health = false
-						continue
-					}
+						err := tempClient.Send(nodeConn.Context, []byte("PING\r\n"))
+						if err != nil {
+							nodeConn.Health = false
+							tempClient.Close()
+						} else {
 
-					// We check if the response is "OK PONG\r\n"
-					if string(response) != "OK PONG\r\n" {
-						c.Logger.Warn("read error", "error", err)
-						// Mark the node as unhealthy
-						nodeConn.Health = false
-						continue
+							response, err := tempClient.Receive(nodeConn.Context)
+							if err != nil {
+								c.Logger.Warn("read error", "error", err)
+								nodeConn.Health = false
+							} else {
+
+								if string(response) != "OK PONG\r\n" {
+									c.Logger.Warn("unexpected response", "response", string(response))
+									nodeConn.Health = false
+								}
+							}
+
+							tempClient.Close()
+						}
 					}
 
 				}
 
 				for _, replicaConn := range nodeConn.Replicas {
+					// We acquire the lock for the replica connection
+					replicaConn.Lock.Lock()
+
 					if !replicaConn.Health {
 						c.Logger.Warn("replica is unhealthy", "replica", replicaConn.Config.ServerAddress)
 						if replicaConn.Context == nil {
@@ -271,42 +291,64 @@ func (c *Cluster) backgroundHealthChecks() {
 							err := replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("NAUTH %x\r\n", sharedKeyHash)))
 							if err != nil {
 								c.Logger.Warn("replica authentication error", "error", err)
+								// Unlock the replica connection
+								replicaConn.Lock.Unlock()
 								continue
 							}
 							response, err := replicaConn.Client.Receive(replicaConn.Context)
 							if err != nil || string(response) != "OK authenticated\r\n" {
 								c.Logger.Warn("replica authentication error", "error", err)
+								// Unlock the replica connection
+								replicaConn.Lock.Unlock()
 								continue
 							}
 							replicaConn.Health = true
 							c.Logger.Info("replica is reconnected and healthy", "replica", replicaConn.Config.ServerAddress)
 						}
+
+						// Unlock the replica connection
+						replicaConn.Lock.Unlock()
 					} else {
-
-						// We ping
-						err := replicaConn.Client.Send(replicaConn.Context, []byte("PING\r\n"))
-						if err != nil {
-							// Mark the node as unhealthy
+						// We create a temp connection to the replica using a new client
+						tempClient := client.New(replicaConn.Client.Config, c.Logger)
+						if err := tempClient.Connect(replicaConn.Context); err != nil {
+							c.Logger.Warn("node connection error", "error", err)
 							replicaConn.Health = false
-						}
-
-						// We read response
-						response, err := replicaConn.Client.Receive(replicaConn.Context)
-						if err != nil {
-							c.Logger.Warn("read error", "error", err)
-							replicaConn.Health = false
+							replicaConn.Lock.Unlock()
 							continue
 						}
 
-						// We check if the response is "OK PONG\r\n"
+						err := tempClient.Send(replicaConn.Context, []byte("PING\r\n"))
+						if err != nil {
+							replicaConn.Health = false
+							tempClient.Close()
+							replicaConn.Lock.Unlock()
+							continue
+						}
+
+						response, err := tempClient.Receive(replicaConn.Context)
+						if err != nil {
+							c.Logger.Warn("read error", "error", err)
+							replicaConn.Health = false
+							tempClient.Close()
+							replicaConn.Lock.Unlock()
+							continue
+						}
+
 						if string(response) != "OK PONG\r\n" {
-							c.Logger.Warn("read error", "error", err)
-							// Mark the node as unhealthy
+							c.Logger.Warn("unexpected response", "response", string(response))
 							replicaConn.Health = false
-							continue
 						}
+
+						tempClient.Close()
+
+						replicaConn.Lock.Unlock()
+
 					}
 				}
+
+				// Unlock the node connection
+				nodeConn.Lock.Unlock()
 			}
 		}
 	}
@@ -444,7 +486,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	authenticated := false // Whether client is authenticated to the cluster
 
 	for {
-		_ = conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{}) // Disable read deadline
 		n, err := conn.Read(buffer)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -553,13 +595,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			if err != nil {
 				_, err = conn.Write([]byte("ERR write error\r\n"))
 				if err != nil {
+					h.Cluster.NodeConnectionsLock.RUnlock()
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
 			} else {
-
+				h.Cluster.NodeConnectionsLock.RUnlock()
 				_, err = conn.Write(response)
 				if err != nil {
+					h.Cluster.NodeConnectionsLock.RUnlock()
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
@@ -629,6 +673,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
+
+				if err != nil {
+					_, err = conn.Write([]byte("ERR write error\r\n"))
+					if err != nil {
+						h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+						return
+					}
+				}
+
+				continue
 			}
 
 			_, err = conn.Write(response)
@@ -665,6 +719,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
+
+				if err != nil {
+					_, err = conn.Write([]byte("ERR write error\r\n"))
+					if err != nil {
+						h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+						return
+					}
+				}
+
+				continue
 			}
 
 			_, err = conn.Write(response)
@@ -702,6 +766,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
+
+				if err != nil {
+					_, err = conn.Write([]byte("ERR write error\r\n"))
+					if err != nil {
+						h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
+						return
+					}
+				}
+
+				continue
 			}
 
 			_, err = conn.Write(response)
@@ -819,84 +893,119 @@ func (c *Cluster) ParallelDelete(command []byte) ([]byte, error) {
 		Node      *NodeConnection
 	}
 
+	responseChannel := make(chan *struct {
+		TimeStamp time.Time
+		Data      []byte
+		Node      *NodeConnection
+	}, len(c.NodeConnections))
+
 	wg := sync.WaitGroup{}
-	lock := sync.Mutex{}
 
 	for _, nodeConn := range c.NodeConnections {
-		if nodeConn.Health {
+		nodeConn.Lock.Lock()
 
-			wg.Add(1)
-			go func(nodeConn *NodeConnection) {
-				defer wg.Done()
-
-				// We send the command
-				err := nodeConn.Client.Send(nodeConn.Context, command)
-				if err != nil {
-					c.Logger.Warn("write error", "error", err)
-					return
-				}
-
-				// We receive the response
-				rec, err := nodeConn.Client.Receive(nodeConn.Context)
-				if err != nil {
-					c.Logger.Warn("read error", "error", err)
-					return
-				}
-
-				// If OK
-				if bytes.HasPrefix(rec, []byte("OK")) {
-
-					// We parse the received response
-					timestamp := bytes.Split(rec, []byte(" "))[1]
-					data := bytes.Join(bytes.Split(rec, []byte(" "))[2:], []byte(" "))
-
-					responseInner := &struct {
-						TimeStamp time.Time
-						Data      []byte
-						Node      *NodeConnection
-					}{}
-
-					responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestamp))
-					if err != nil {
-						c.Logger.Warn("time parse error", "error", err)
-						return
-					}
-
-					responseInner.Data = data
-					responseInner.Node = nodeConn
-
-					lock.Lock()
-					defer lock.Unlock()
-
-					if response != nil {
-						// We compare the timestamps
-						if response.TimeStamp.After(responseInner.TimeStamp) {
-							// We send a delete command to the primary node
-
-							key := bytes.Split(command, []byte(" "))[1]
-
-							err = response.Node.Client.Send(response.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
-							if err != nil {
-								c.Logger.Warn("write error", "error", err)
-								return
-							}
-
-							_, err := response.Node.Client.Receive(response.Node.Context)
-							if err != nil {
-								c.Logger.Warn("read error", "error", err)
-								return
-							}
-						}
-					}
-				}
-			}(nodeConn)
+		if !nodeConn.Health {
+			nodeConn.Lock.Unlock()
+			continue
 		}
+
+		wg.Add(1)
+		go func(nodeConn *NodeConnection) {
+			defer wg.Done()
+			defer nodeConn.Lock.Unlock() // Always release the lock
+
+			// We send the command
+			err := nodeConn.Client.Send(nodeConn.Context, command)
+			if err != nil {
+				c.Logger.Warn("write error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+				return
+			}
+
+			// We receive the response
+			rec, err := nodeConn.Client.Receive(nodeConn.Context)
+			if err != nil {
+				c.Logger.Warn("read error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+				return
+			}
+
+			// If OK
+			if bytes.HasPrefix(rec, []byte("OK")) {
+				parts := bytes.Split(rec, []byte(" "))
+				if len(parts) < 3 {
+					c.Logger.Warn("invalid response format", "response", string(rec), "node", nodeConn.Config.Node.ServerAddress)
+					return
+				}
+
+				// We parse the received response
+				timestamp := parts[1]
+				data := bytes.Join(parts[2:], []byte(" "))
+
+				ts, err := time.Parse(time.RFC3339, string(timestamp))
+				if err != nil {
+					c.Logger.Warn("time parse error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+					return
+				}
+
+				// Send the response to the channel
+				responseChannel <- &struct {
+					TimeStamp time.Time
+					Data      []byte
+					Node      *NodeConnection
+				}{
+					TimeStamp: ts,
+					Data:      data,
+					Node:      nodeConn,
+				}
+			} else {
+				// This node doesn't have the key - log but don't treat as error
+				c.Logger.Debug("node doesn't have key to delete",
+					"node", nodeConn.Config.Node.ServerAddress,
+					"response", string(rec),
+					"command", string(command))
+			}
+		}(nodeConn)
 	}
 
-	wg.Wait()
+	// Wait in a separate goroutine and close the channel when done
+	go func() {
+		wg.Wait()
+		close(responseChannel)
+	}()
 
+	// Process all responses and find the one with the most recent timestamp
+	responseLock := sync.Mutex{}
+	for resp := range responseChannel {
+		responseLock.Lock()
+		if response == nil || resp.TimeStamp.After(response.TimeStamp) {
+			response = resp
+		}
+		responseLock.Unlock()
+	}
+
+	// If we didn't get any successful responses
 	if response == nil {
 		return []byte("ERR key not found\r\n"), nil
+	}
+
+	// Clean up any older versions on other nodes
+	for _, nodeConn := range c.NodeConnections {
+		if nodeConn != response.Node && nodeConn.Health {
+			// Run deletion in background to not block the main flow
+			go func(node *NodeConnection) {
+				node.Lock.Lock()
+				defer node.Lock.Unlock()
+
+				key := bytes.Split(command, []byte(" "))[1]
+				err := node.Client.Send(node.Context, []byte(fmt.Sprintf("DEL %s", key)))
+				if err != nil {
+					c.Logger.Warn("cleanup delete error", "error", err, "node", node.Config.Node.ServerAddress)
+					return
+				}
+
+				// We don't need to check the response - it might not exist on this node
+				_, _ = node.Client.Receive(node.Context)
+			}(nodeConn)
+		}
 	}
 
 	return response.Data, nil
@@ -909,752 +1018,915 @@ func (c *Cluster) Stats() []byte {
 	// We get the cluster stats
 	response = append(response, c.clusterStats()...)
 
-	// We send a stat command to all nodes and form a response
+	// We send a stat command to all nodes in parallel to avoid blocking
+	var wg sync.WaitGroup
+	var responseLock sync.Mutex
+
 	for _, nodeConn := range c.NodeConnections {
+		nodeConn.Lock.Lock()
+
+		// Add node header to response
+		responseLock.Lock()
 		response = append(response, fmt.Sprintf("PRIMARY %s\r\n", nodeConn.Config.Node.ServerAddress)...)
-		if nodeConn.Health {
-			// We send the command
-			err := nodeConn.Client.Send(nodeConn.Context, []byte("STAT\r\n"))
-			if err != nil {
-				c.Logger.Warn("write error", "error", err)
-				return []byte("ERR write error\r\n")
-			}
+		responseLock.Unlock()
 
-			// We receive the response
-			rec, err := nodeConn.Client.Receive(nodeConn.Context)
-			if err != nil {
-				c.Logger.Warn("read error", "error", err)
-				return []byte("ERR read error\r\n")
-			}
-
-			rec = bytes.TrimPrefix(rec, []byte("OK\r\n"))
-
-			response = append(response, rec...)
-		} else {
-
+		if !nodeConn.Health {
+			// Node is down
+			responseLock.Lock()
 			response = append(response, []byte("down\r\n")...)
+			responseLock.Unlock()
+			nodeConn.Lock.Unlock()
+		} else {
+			// Use goroutine to get stats from healthy node
+			wg.Add(1)
+			go func(nc *NodeConnection) {
+				defer wg.Done()
+				defer nc.Lock.Unlock()
+
+				// Send the STAT command
+				if err := nc.Client.Send(nc.Context, []byte("STAT\r\n")); err != nil {
+					c.Logger.Warn("write error", "error", err, "node", nc.Config.Node.ServerAddress)
+					responseLock.Lock()
+					response = append(response, []byte("error: failed to send command\r\n")...)
+					responseLock.Unlock()
+					return
+				}
+
+				// Receive the response
+				rec, err := nc.Client.Receive(nc.Context)
+				if err != nil {
+					c.Logger.Warn("read error", "error", err, "node", nc.Config.Node.ServerAddress)
+					responseLock.Lock()
+					response = append(response, []byte("error: failed to receive stats\r\n")...)
+					responseLock.Unlock()
+					return
+				}
+
+				// Trim the OK prefix and add to response
+				rec = bytes.TrimPrefix(rec, []byte("OK\r\n"))
+				responseLock.Lock()
+				response = append(response, rec...)
+				responseLock.Unlock()
+			}(nodeConn)
 		}
 
-		// We check the replicas
+		// Process replicas for this node
 		for _, replicaConn := range nodeConn.Replicas {
+			replicaConn.Lock.Lock()
+
+			// Add replica header to response
+			responseLock.Lock()
 			response = append(response, fmt.Sprintf("REPLICA %s\r\n", replicaConn.Config.ServerAddress)...)
-			if replicaConn.Health {
-				// We send the command
-				err := replicaConn.Client.Send(replicaConn.Context, []byte("STAT\r\n"))
-				if err != nil {
-					c.Logger.Warn("write error", "error", err)
-					return []byte("ERR write error\r\n")
-				}
+			responseLock.Unlock()
 
-				// We receive the response
-				rec, err := replicaConn.Client.Receive(replicaConn.Context)
-				if err != nil {
-					c.Logger.Warn("read error", "error", err)
-					return []byte("ERR read error\r\n")
-				}
-
-				rec = bytes.TrimPrefix(rec, []byte("OK\r\n"))
-
-				response = append(response, rec...)
-			} else {
-
+			if !replicaConn.Health {
+				// Replica is down
+				responseLock.Lock()
 				response = append(response, []byte("down\r\n")...)
-			}
+				responseLock.Unlock()
+				replicaConn.Lock.Unlock()
+			} else {
+				// Use goroutine to get stats from healthy replica
+				wg.Add(1)
+				go func(rc *ReplicaConnection) {
+					defer wg.Done()
+					defer rc.Lock.Unlock()
 
+					// Send the STAT command
+					if err := rc.Client.Send(rc.Context, []byte("STAT\r\n")); err != nil {
+						c.Logger.Warn("write error", "error", err, "replica", rc.Config.ServerAddress)
+						responseLock.Lock()
+						response = append(response, []byte("error: failed to send command\r\n")...)
+						responseLock.Unlock()
+						return
+					}
+
+					// Receive the response
+					rec, err := rc.Client.Receive(rc.Context)
+					if err != nil {
+						c.Logger.Warn("read error", "error", err, "replica", rc.Config.ServerAddress)
+						responseLock.Lock()
+						response = append(response, []byte("error: failed to receive stats\r\n")...)
+						responseLock.Unlock()
+						return
+					}
+
+					// Trim the OK prefix and add to response
+					rec = bytes.TrimPrefix(rec, []byte("OK\r\n"))
+					responseLock.Lock()
+					response = append(response, rec...)
+					responseLock.Unlock()
+				}(replicaConn)
+			}
 		}
 	}
+
+	// Wait for all stats gathering to complete
+	wg.Wait()
 
 	return response
 }
 
 // ParallelIncrDecr increments a key in all primary nodes in parallel
 func (c *Cluster) ParallelIncrDecr(command []byte) ([]byte, error) {
-	// We incr from all primary nodes
+	// We incr|decr from all primary nodes
 	var response *struct {
 		TimeStamp time.Time
 		Data      []byte
 		Node      *NodeConnection
 	}
 
+	responseChannel := make(chan *struct {
+		TimeStamp time.Time
+		Data      []byte
+		Node      *NodeConnection
+	}, len(c.NodeConnections))
+
 	wg := sync.WaitGroup{}
-	lock := sync.Mutex{}
 
 	for _, nodeConn := range c.NodeConnections {
-		if nodeConn.Health {
+		nodeConn.Lock.Lock()
 
-			wg.Add(1)
-			go func(nodeConn *NodeConnection) {
-				defer wg.Done()
+		if !nodeConn.Health {
+			nodeConn.Lock.Unlock()
+			continue
+		}
 
-				// We send the command
-				err := nodeConn.Client.Send(nodeConn.Context, command)
-				if err != nil {
-					c.Logger.Warn("write error", "error", err)
+		wg.Add(1)
+		go func(nodeConn *NodeConnection) {
+			defer wg.Done()
+			defer nodeConn.Lock.Unlock() // Always release the lock
+
+			// We send the command
+			err := nodeConn.Client.Send(nodeConn.Context, command)
+			if err != nil {
+				c.Logger.Warn("write error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+				return
+			}
+
+			// We receive the response
+			rec, err := nodeConn.Client.Receive(nodeConn.Context)
+			if err != nil {
+				c.Logger.Warn("read error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+				return
+			}
+
+			// If OK
+			if bytes.HasPrefix(rec, []byte("OK")) {
+				parts := bytes.Split(rec, []byte(" "))
+				if len(parts) < 3 {
+					c.Logger.Warn("invalid response format", "response", string(rec), "node", nodeConn.Config.Node.ServerAddress)
 					return
 				}
 
-				// We receive the response
-				rec, err := nodeConn.Client.Receive(nodeConn.Context)
+				// We parse the received response
+				timestamp := parts[1]
+				data := bytes.Join(parts[2:], []byte(" "))
+
+				ts, err := time.Parse(time.RFC3339, string(timestamp))
 				if err != nil {
-					c.Logger.Warn("read error", "error", err)
+					c.Logger.Warn("time parse error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
 					return
 				}
 
-				// If OK
-				if bytes.HasPrefix(rec, []byte("OK")) {
+				// Send the response to the channel
+				responseChannel <- &struct {
+					TimeStamp time.Time
+					Data      []byte
+					Node      *NodeConnection
+				}{
+					TimeStamp: ts,
+					Data:      data,
+					Node:      nodeConn,
+				}
+			} else {
+				// This node doesn't have the key or had an error - log but don't treat as error
+				c.Logger.Debug("node operation failed for incr/decr",
+					"node", nodeConn.Config.Node.ServerAddress,
+					"response", string(rec),
+					"command", string(command))
+			}
+		}(nodeConn)
+	}
 
-					// We parse the received response
-					timestamp := bytes.Split(rec, []byte(" "))[1]
-					data := bytes.Join(bytes.Split(rec, []byte(" "))[2:], []byte(" "))
+	// Wait in a separate goroutine and close the channel when done
+	go func() {
+		wg.Wait()
+		close(responseChannel)
+	}()
 
-					responseInner := &struct {
-						TimeStamp time.Time
-						Data      []byte
-						Node      *NodeConnection
-					}{}
+	// Process all responses and find the one with the most recent timestamp
+	responseLock := sync.Mutex{}
+	for resp := range responseChannel {
+		responseLock.Lock()
+		if response == nil || resp.TimeStamp.After(response.TimeStamp) {
+			// If we found a newer response, clean up the older one
+			if response != nil {
+				// Run deletion in background to not block the main flow
+				go func(oldNode *NodeConnection) {
+					oldNode.Lock.Lock()
+					defer oldNode.Lock.Unlock()
 
-					responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestamp))
-					if err != nil {
-						c.Logger.Warn("time parse error", "error", err)
+					if !oldNode.Health {
 						return
 					}
 
-					responseInner.Data = data
-					responseInner.Node = nodeConn
-
-					lock.Lock()
-					defer lock.Unlock()
-
-					if response != nil {
-						// We compare the timestamps
-						if response.TimeStamp.After(responseInner.TimeStamp) {
-							// We send a delete command to the primary node
-
-							key := bytes.Split(command, []byte(" "))[1]
-
-							err = response.Node.Client.Send(response.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
-							if err != nil {
-								c.Logger.Warn("write error", "error", err)
-								return
-							}
-
-							// We get response from node assure it's ok log it
-							nodeResponse, err := response.Node.Client.Receive(response.Node.Context)
-							if err != nil {
-								c.Logger.Warn("read error", "error", err)
-								return
-							}
-
-							if string(nodeResponse) != "OK key-value deleted\r\n" {
-								c.Logger.Warn("delete error", "error", err)
-								return
-							}
-							c.Logger.Info("key deleted", "key", string(key))
-						}
+					key := bytes.Split(command, []byte(" "))[1]
+					err := oldNode.Client.Send(oldNode.Context, []byte(fmt.Sprintf("DEL %s", key)))
+					if err != nil {
+						c.Logger.Warn("cleanup delete error", "error", err, "node", oldNode.Config.Node.ServerAddress)
+						return
 					}
 
-					response = responseInner
-				}
-			}(nodeConn)
-		}
+					// Check delete response
+					delResp, err := oldNode.Client.Receive(oldNode.Context)
+					if err != nil {
+						c.Logger.Warn("cleanup read error", "error", err, "node", oldNode.Config.Node.ServerAddress)
+						return
+					}
 
+					if bytes.HasPrefix(delResp, []byte("OK")) {
+						c.Logger.Info("deleted stale key during incr/decr",
+							"key", string(bytes.Split(command, []byte(" "))[1]),
+							"node", oldNode.Config.Node.ServerAddress)
+					}
+				}(response.Node)
+			}
+
+			response = resp
+		}
+		responseLock.Unlock()
 	}
 
-	wg.Wait()
-
+	// If we didn't get any successful responses
 	if response == nil {
 		return []byte("ERR key not found\r\n"), nil
 	}
 
 	return response.Data, nil
-
 }
 
 // ParallelGet reads from all replicas in parallel
 func (c *Cluster) ParallelGet(command []byte) ([]byte, error) {
-	// We get from all primary replicas
+	// We get from all primary nodes and replicas
 	var response *struct {
 		TimeStamp time.Time
 		Data      []byte
 		Node      *NodeConnection
 	}
 
+	responseChannel := make(chan *struct {
+		TimeStamp time.Time
+		Data      []byte
+		Node      *NodeConnection
+	}, len(c.NodeConnections)*2) // Buffer for all possible responses
+
 	wg := sync.WaitGroup{}
-	lock := sync.Mutex{}
+	responseLock := sync.Mutex{}
 
+	// Process all node connections
 	for _, nodeConn := range c.NodeConnections {
+		nodeConn.Lock.Lock()
 
-		if !nodeConn.Health {
-			// We check replica if primary is down
-			for _, replicaConn := range nodeConn.Replicas {
-				if !replicaConn.Health {
-					continue
-				}
-
-				wg.Add(1)
-				go func(nodeConn *NodeConnection, replicaConn *ReplicaConnection) {
-					defer wg.Done()
-
-					// We send the command
-					err := replicaConn.Client.Send(replicaConn.Context, command)
-					if err != nil {
-						c.Logger.Warn("write error", "error", err)
-						return
-					}
-
-					// We receive the response
-					rec, err := replicaConn.Client.Receive(replicaConn.Context)
-					if err != nil {
-						c.Logger.Warn("read error", "error", err)
-						return
-					}
-
-					// If OK
-					if bytes.HasPrefix(rec, []byte("OK")) {
-
-						// We parse the received response
-						timestamp := bytes.Split(rec, []byte(" "))[1]
-						data := bytes.Join(bytes.Split(rec, []byte(" "))[2:], []byte(" "))
-
-						responseInner := &struct {
-							TimeStamp time.Time
-							Data      []byte
-							Node      *NodeConnection
-						}{}
-
-						responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestamp))
-						if err != nil {
-							c.Logger.Warn("time parse error", "error", err)
-							return
-						}
-
-						responseInner.Data = data
-						responseInner.Node = nodeConn
-
-						lock.Lock()
-						defer lock.Unlock()
-
-						if response != nil {
-							// We compare the timestamps
-							if response.TimeStamp.After(responseInner.TimeStamp) {
-								// We send a delete command to the primary node
-
-								key := bytes.Split(command, []byte(" "))[1]
-
-								err = response.Node.Client.Send(response.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
-								if err != nil {
-									c.Logger.Warn("write error", "error", err)
-									return
-								}
-
-								// We get response from node assure it's ok log it
-								nodeResponse, err := response.Node.Client.Receive(response.Node.Context)
-								if err != nil {
-									c.Logger.Warn("read error", "error", err)
-									return
-								}
-
-								if string(nodeResponse) != "OK key-value deleted\r\n" {
-									c.Logger.Warn("delete error", "error", err)
-									return
-								}
-								c.Logger.Info("key deleted", "key", string(key))
-							}
-						}
-
-						response = responseInner
-					}
-				}(nodeConn, replicaConn)
-
-			}
-			continue
-		} else {
-
+		// Check if the primary node is healthy
+		if nodeConn.Health {
+			// Handle primary node
 			wg.Add(1)
 			go func(nodeConn *NodeConnection) {
 				defer wg.Done()
+				defer nodeConn.Lock.Unlock() // Always release the lock
 
-				// We send the command
+				// Send the command
 				err := nodeConn.Client.Send(nodeConn.Context, command)
 				if err != nil {
-					c.Logger.Warn("write error", "error", err)
+					c.Logger.Warn("write error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
 					return
 				}
 
-				// We receive the response
+				// Receive the response
 				rec, err := nodeConn.Client.Receive(nodeConn.Context)
 				if err != nil {
-					c.Logger.Warn("read error", "error", err)
+					c.Logger.Warn("read error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
 					return
 				}
 
-				// If OK
+				// If the response starts with "OK", this node has the data
 				if bytes.HasPrefix(rec, []byte("OK")) {
-
-					// We parse the received response
-					timestamp := bytes.Split(rec, []byte(" "))[1]
-					data := bytes.Join(bytes.Split(rec, []byte(" "))[2:], []byte(" "))
-
-					responseInner := &struct {
-						TimeStamp time.Time
-						Data      []byte
-						Node      *NodeConnection
-					}{}
-
-					responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestamp))
-					if err != nil {
-						c.Logger.Warn("time parse error", "error", err)
+					parts := bytes.Split(rec, []byte(" "))
+					if len(parts) < 3 {
+						c.Logger.Warn("invalid response format", "response", string(rec), "node", nodeConn.Config.Node.ServerAddress)
 						return
 					}
 
-					responseInner.Data = data
-					responseInner.Node = nodeConn
+					timestamp := parts[1]
+					data := bytes.Join(parts[2:], []byte(" "))
 
-					lock.Lock()
-					defer lock.Unlock()
-
-					if response != nil {
-						// We compare the timestamps
-						if response.TimeStamp.After(responseInner.TimeStamp) {
-							// We send a delete command to the node
-							key := bytes.Split(command, []byte(" "))[1]
-
-							err = response.Node.Client.Send(response.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
-							if err != nil {
-								c.Logger.Warn("write error", "error", err)
-								return
-							}
-
-							// We get response from node assure it's ok log it
-							nodeResponse, err := response.Node.Client.Receive(response.Node.Context)
-							if err != nil {
-								c.Logger.Warn("read error", "error", err)
-								return
-							}
-
-							if string(nodeResponse) != "OK key-value deleted\r\n" {
-								c.Logger.Warn("delete error", "error", err)
-								return
-							}
-							c.Logger.Info("key deleted", "key", string(key))
-						}
+					ts, err := time.Parse(time.RFC3339, string(timestamp))
+					if err != nil {
+						c.Logger.Warn("time parse error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+						return
 					}
 
-					response = responseInner
+					// Send this response to the channel
+					responseChannel <- &struct {
+						TimeStamp time.Time
+						Data      []byte
+						Node      *NodeConnection
+					}{
+						TimeStamp: ts,
+						Data:      data,
+						Node:      nodeConn,
+					}
+				} else {
+					// This node doesn't have the data - log it but don't treat as an error
+					c.Logger.Debug("node doesn't have key",
+						"node", nodeConn.Config.Node.ServerAddress,
+						"response", string(rec),
+						"command", string(command))
 				}
 			}(nodeConn)
+		} else {
+			// Primary node is unhealthy, release its lock
+			nodeConn.Lock.Unlock()
+
+			// Try replicas for this node
+			for _, replicaConn := range nodeConn.Replicas {
+				replicaConn.Lock.Lock()
+
+				if !replicaConn.Health {
+					// Replica is unhealthy, skip it
+					replicaConn.Lock.Unlock()
+					continue
+				}
+
+				// Process healthy replica
+				wg.Add(1)
+				go func(nodeConn *NodeConnection, replicaConn *ReplicaConnection) {
+					defer wg.Done()
+					defer replicaConn.Lock.Unlock() // Always release the lock
+
+					// Send the command
+					err := replicaConn.Client.Send(replicaConn.Context, command)
+					if err != nil {
+						c.Logger.Warn("write error", "error", err, "replica", replicaConn.Config.ServerAddress)
+						return
+					}
+
+					// Receive the response
+					rec, err := replicaConn.Client.Receive(replicaConn.Context)
+					if err != nil {
+						c.Logger.Warn("read error", "error", err, "replica", replicaConn.Config.ServerAddress)
+						return
+					}
+
+					// If the response starts with "OK", this replica has the data
+					if bytes.HasPrefix(rec, []byte("OK")) {
+						parts := bytes.Split(rec, []byte(" "))
+						if len(parts) < 3 {
+							c.Logger.Warn("invalid response format", "response", string(rec), "replica", replicaConn.Config.ServerAddress)
+							return
+						}
+
+						timestamp := parts[1]
+						data := bytes.Join(parts[2:], []byte(" "))
+
+						ts, err := time.Parse(time.RFC3339, string(timestamp))
+						if err != nil {
+							c.Logger.Warn("time parse error", "error", err, "replica", replicaConn.Config.ServerAddress)
+							return
+						}
+
+						// Send this response to the channel
+						responseChannel <- &struct {
+							TimeStamp time.Time
+							Data      []byte
+							Node      *NodeConnection
+						}{
+							TimeStamp: ts,
+							Data:      data,
+							Node:      nodeConn,
+						}
+					} else {
+						// This replica doesn't have the data - log it but don't treat as an error
+						c.Logger.Debug("replica doesn't have key",
+							"replica", replicaConn.Config.ServerAddress,
+							"response", string(rec),
+							"command", string(command))
+					}
+				}(nodeConn, replicaConn)
+			}
 		}
 	}
 
-	wg.Wait()
+	// Wait in a separate goroutine
+	go func() {
+		wg.Wait()
+		close(responseChannel)
+	}()
 
+	// Process all responses and find the one with the most recent timestamp
+	for resp := range responseChannel {
+		responseLock.Lock()
+		if response == nil || resp.TimeStamp.After(response.TimeStamp) {
+			// If we already have a response with an older timestamp, we should delete that key
+			if response != nil {
+				key := bytes.Split(command, []byte(" "))[1]
+
+				// Run deletion in background to not block the main flow
+				go func(oldNode *NodeConnection, keyToDelete []byte) {
+					oldNode.Lock.Lock()
+					defer oldNode.Lock.Unlock()
+
+					if !oldNode.Health {
+						return
+					}
+
+					err := oldNode.Client.Send(oldNode.Context, []byte(fmt.Sprintf("DEL %s", keyToDelete)))
+					if err != nil {
+						c.Logger.Warn("write error during cleanup", "error", err, "node", oldNode.Config.Node.ServerAddress)
+						return
+					}
+
+					// Check deletion response
+					delResp, err := oldNode.Client.Receive(oldNode.Context)
+					if err != nil {
+						c.Logger.Warn("read error during cleanup", "error", err, "node", oldNode.Config.Node.ServerAddress)
+						return
+					}
+
+					if !bytes.HasPrefix(delResp, []byte("OK")) {
+						c.Logger.Warn("delete error during cleanup", "response", string(delResp), "node", oldNode.Config.Node.ServerAddress)
+						return
+					}
+
+					c.Logger.Info("deleted stale key", "key", string(keyToDelete), "node", oldNode.Config.Node.ServerAddress)
+				}(response.Node, key)
+			}
+
+			// Update our response to the more recent one
+			response = resp
+		}
+		responseLock.Unlock()
+	}
+
+	// Check if we found any response
 	if response == nil {
 		return []byte("ERR key not found\r\n"), nil
 	}
 
-	return response.Data, nil
+	// Format the response data
+	return []byte(fmt.Sprintf("OK %s", response.Data)), nil
 }
 
 // ParallelRegx reads from all replicas in parallel using REGX command
 // replaces duplicate keys comparing timestamps
 func (c *Cluster) ParallelRegx(command []byte) ([]byte, error) {
-	// We try to get from primary if not avail we try replica to command
-	var response []*struct {
+	// We collect results with keys as map keys for easy deduplication
+	resultMap := make(map[string]*struct {
 		TimeStamp time.Time
 		Key       []byte
 		Data      []byte
 		Node      *NodeConnection
-	}
+	})
 
 	wg := sync.WaitGroup{}
-	lock := sync.Mutex{}
+	resultLock := sync.Mutex{}
 
+	// Process all nodes
 	for _, nodeConn := range c.NodeConnections {
+		nodeConn.Lock.Lock()
 
 		if !nodeConn.Health {
-			// We check replica if primary is down
+			nodeConn.Lock.Unlock()
+
+			// Process replicas if primary is down
 			for _, replicaConn := range nodeConn.Replicas {
+				replicaConn.Lock.Lock()
+
 				if !replicaConn.Health {
+					replicaConn.Lock.Unlock()
 					continue
 				}
 
 				wg.Add(1)
 				go func(nodeConn *NodeConnection, replicaConn *ReplicaConnection) {
 					defer wg.Done()
+					defer replicaConn.Lock.Unlock()
 
-					// We send the command
+					// Send the command
 					err := replicaConn.Client.Send(replicaConn.Context, command)
 					if err != nil {
-						c.Logger.Warn("write error", "error", err)
+						c.Logger.Warn("write error", "error", err, "replica", replicaConn.Config.ServerAddress)
 						return
 					}
 
-					// We receive the response
+					// Receive the response
 					rec, err := replicaConn.Client.Receive(replicaConn.Context)
 					if err != nil {
-						c.Logger.Warn("read error", "error", err)
+						c.Logger.Warn("read error", "error", err, "replica", replicaConn.Config.ServerAddress)
 						return
 					}
 
-					// If OK
+					// Process successful response
 					if bytes.HasPrefix(rec, []byte("OK")) {
-
-						// We split by CRLF
 						results := bytes.Split(rec, []byte("\r\n"))
 						for i, result := range results {
-							var timestampBytes []byte
-							var data []byte
+							if len(result) == 0 {
+								continue
+							}
 
-							responseInner := &struct {
+							// Parse the result line
+							var timestampBytes []byte
+							var keyBytes []byte
+							var dataBytes []byte
+
+							parts := bytes.Split(result, []byte(" "))
+							if len(parts) < 2 {
+								continue
+							}
+
+							if i == 0 { // First line format OK <timestamp> <key> <data>
+								if len(parts) < 3 {
+									continue
+								}
+								timestampBytes = parts[1]
+								keyBytes = parts[2]
+								dataBytes = bytes.Join(parts[3:], []byte(" "))
+							} else { // Other lines format <timestamp> <key> <data>
+								timestampBytes = parts[0]
+								keyBytes = parts[1]
+								dataBytes = bytes.Join(parts[2:], []byte(" "))
+							}
+
+							// Parse timestamp
+							ts, err := time.Parse(time.RFC3339, string(timestampBytes))
+							if err != nil {
+								c.Logger.Warn("time parse error", "error", err, "replica", replicaConn.Config.ServerAddress)
+								continue
+							}
+
+							// Add to results map with deduplication
+							resultLock.Lock()
+							keyStr := string(keyBytes)
+							existing, exists := resultMap[keyStr]
+
+							if !exists || ts.After(existing.TimeStamp) {
+								// Replace or add new entry
+								resultMap[keyStr] = &struct {
+									TimeStamp time.Time
+									Key       []byte
+									Data      []byte
+									Node      *NodeConnection
+								}{
+									TimeStamp: ts,
+									Key:       keyBytes,
+									Data:      dataBytes,
+									Node:      nodeConn,
+								}
+
+								// If we had an older version, schedule it for deletion
+								if exists && !bytes.Equal(existing.Key, keyBytes) {
+									go func(n *NodeConnection, k []byte) {
+										n.Lock.Lock()
+										defer n.Lock.Unlock()
+										if !n.Health {
+											return
+										}
+
+										err := n.Client.Send(n.Context, []byte(fmt.Sprintf("DEL %s", k)))
+										if err != nil {
+											return
+										}
+
+										// Just receive without checking
+										_, _ = n.Client.Receive(n.Context)
+									}(existing.Node, existing.Key)
+								}
+							}
+							resultLock.Unlock()
+						}
+					}
+				}(nodeConn, replicaConn)
+			}
+		} else {
+			// Process healthy primary node
+			wg.Add(1)
+			go func(nodeConn *NodeConnection) {
+				defer wg.Done()
+				defer nodeConn.Lock.Unlock()
+
+				// Send the command
+				err := nodeConn.Client.Send(nodeConn.Context, command)
+				if err != nil {
+					c.Logger.Warn("write error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+					return
+				}
+
+				// Receive the response
+				rec, err := nodeConn.Client.Receive(nodeConn.Context)
+				if err != nil {
+					c.Logger.Warn("read error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+					return
+				}
+
+				// Process successful response
+				if bytes.HasPrefix(rec, []byte("OK")) {
+					results := bytes.Split(rec, []byte("\r\n"))
+					for i, result := range results {
+						if len(result) == 0 {
+							continue
+						}
+
+						// Parse the result line
+						var timestampBytes []byte
+						var keyBytes []byte
+						var dataBytes []byte
+
+						parts := bytes.Split(result, []byte(" "))
+						if len(parts) < 2 {
+							continue
+						}
+
+						if i == 0 { // First line format OK <timestamp> <key> <data>
+							if len(parts) < 3 {
+								continue
+							}
+							timestampBytes = parts[1]
+							keyBytes = parts[2]
+							dataBytes = bytes.Join(parts[3:], []byte(" "))
+						} else { // Other lines format <timestamp> <key> <data>
+							timestampBytes = parts[0]
+							keyBytes = parts[1]
+							dataBytes = bytes.Join(parts[2:], []byte(" "))
+						}
+
+						// Parse timestamp
+						ts, err := time.Parse(time.RFC3339, string(timestampBytes))
+						if err != nil {
+							c.Logger.Warn("time parse error", "error", err, "node", nodeConn.Config.Node.ServerAddress)
+							continue
+						}
+
+						// Add to results map with deduplication
+						resultLock.Lock()
+						keyStr := string(keyBytes)
+						existing, exists := resultMap[keyStr]
+
+						if !exists || ts.After(existing.TimeStamp) {
+							// Replace or add new entry
+							resultMap[keyStr] = &struct {
 								TimeStamp time.Time
 								Key       []byte
 								Data      []byte
 								Node      *NodeConnection
-							}{}
-
-							// We parse the received response
-							if i == 0 {
-								timestampBytes = bytes.Split(result, []byte(" "))[1]
-								data = bytes.Join(bytes.Split(result, []byte(" "))[2:], []byte(" "))
-								responseInner.Key = bytes.Split(result, []byte(" "))[2]
-							} else {
-								timestampBytes = bytes.Split(result, []byte(" "))[0]
-								data = bytes.Join(bytes.Split(result, []byte(" "))[1:], []byte(" "))
-								responseInner.Key = bytes.Split(result, []byte(" "))[1]
+							}{
+								TimeStamp: ts,
+								Key:       keyBytes,
+								Data:      dataBytes,
+								Node:      nodeConn,
 							}
 
-							responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestampBytes))
-							if err != nil {
-								c.Logger.Warn("time parse error", "error", err)
-								return
-							}
-
-							responseInner.Data = data
-							responseInner.Node = nodeConn
-
-							if response != nil {
-								// We check the response results for the key, if its there we compare
-								for j, res := range response {
-									if bytes.Equal(res.Key, responseInner.Key) {
-										// We compare the timestamps
-										if res.TimeStamp.After(responseInner.TimeStamp) {
-											// We send a delete command to the primary node
-
-											key := responseInner.Key
-
-											err = responseInner.Node.Client.Send(responseInner.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
-											if err != nil {
-												c.Logger.Warn("write error", "error", err)
-												return
-											}
-
-											// We get response from node assure it's ok log it
-											nodeResponse, err := responseInner.Node.Client.Receive(responseInner.Node.Context)
-											if err != nil {
-												c.Logger.Warn("read error", "error", err)
-												return
-											}
-
-											if string(nodeResponse) != "OK key-value deleted\r\n" {
-												c.Logger.Warn("delete error", "error", err)
-												return
-											}
-											c.Logger.Info("key deleted", "key", string(key))
-
-											// We replace the response
-											lock.Lock()
-
-											response[j] = responseInner
-											lock.Unlock()
-										}
+							// If we had an older version, schedule it for deletion
+							if exists && !bytes.Equal(existing.Key, keyBytes) {
+								go func(n *NodeConnection, k []byte) {
+									n.Lock.Lock()
+									defer n.Lock.Unlock()
+									if !n.Health {
+										return
 									}
-								}
 
-							}
-						}
-
-					}
-				}(nodeConn, replicaConn)
-
-			}
-			continue
-		} else {
-			wg.Add(1)
-			go func(nodeConn *NodeConnection) {
-				defer wg.Done()
-
-				// We send the command
-				err := nodeConn.Client.Send(nodeConn.Context, command)
-				if err != nil {
-					c.Logger.Warn("write error", "error", err)
-					return
-				}
-
-				// We receive the response
-				rec, err := nodeConn.Client.Receive(nodeConn.Context)
-				if err != nil {
-					c.Logger.Warn("read error", "error", err)
-					return
-				}
-
-				// If OK we parse the response
-				if bytes.HasPrefix(rec, []byte("OK")) {
-
-					// We split by CRLF
-					results := bytes.Split(rec, []byte("\r\n"))
-					for i, result := range results {
-						var timestampBytes []byte
-						var data []byte
-
-						responseInner := &struct {
-							TimeStamp time.Time
-							Key       []byte
-							Data      []byte
-							Node      *NodeConnection
-						}{}
-
-						// We parse the received response
-						if i == 0 {
-							timestampBytes = bytes.Split(result, []byte(" "))[1]
-							data = bytes.Join(bytes.Split(result, []byte(" "))[2:], []byte(" "))
-							responseInner.Key = bytes.Split(result, []byte(" "))[2]
-						} else {
-							timestampBytes = bytes.Split(result, []byte(" "))[0]
-							data = bytes.Join(bytes.Split(result, []byte(" "))[1:], []byte(" "))
-							responseInner.Key = bytes.Split(result, []byte(" "))[1]
-						}
-
-						responseInner.TimeStamp, err = time.Parse(time.RFC3339, string(timestampBytes))
-						if err != nil {
-							c.Logger.Warn("time parse error", "error", err)
-							return
-						}
-
-						responseInner.Data = data
-						responseInner.Node = nodeConn
-
-						if response != nil {
-							// We check the response results for the key, if its there we compare
-							for j, res := range response {
-								if bytes.Equal(res.Key, responseInner.Key) {
-									// We compare the timestamps
-									if res.TimeStamp.After(responseInner.TimeStamp) {
-										// We send a delete command to the primary node
-
-										key := responseInner.Key
-
-										err = responseInner.Node.Client.Send(responseInner.Node.Context, []byte(fmt.Sprintf("DEL %s", key)))
-										if err != nil {
-											c.Logger.Warn("write error", "error", err)
-											return
-										}
-
-										// We get response from node assure it's ok log it
-										nodeResponse, err := responseInner.Node.Client.Receive(responseInner.Node.Context)
-										if err != nil {
-											c.Logger.Warn("read error", "error", err)
-											return
-										}
-
-										if string(nodeResponse) != "OK key-value deleted\r\n" {
-											c.Logger.Warn("delete error", "error", err)
-											return
-										}
-										c.Logger.Info("key deleted", "key", string(key))
-
-										// We replace the response
-										lock.Lock()
-
-										response[j] = responseInner
-										lock.Unlock()
+									err := n.Client.Send(n.Context, []byte(fmt.Sprintf("DEL %s", k)))
+									if err != nil {
+										return
 									}
-								}
+
+									// Just receive without checking
+									_, _ = n.Client.Receive(n.Context)
+								}(existing.Node, existing.Key)
 							}
-
 						}
+						resultLock.Unlock()
 					}
-
 				}
 			}(nodeConn)
 		}
 	}
 
+	// Wait for all goroutines to finish
 	wg.Wait()
 
-	if response == nil {
+	// Check if we found any results
+	if len(resultMap) == 0 {
 		return []byte("ERR no keys found\r\n"), nil
 	}
 
-	results := []byte("OK ")
-	for _, res := range response {
-		results = append(results, []byte(fmt.Sprintf("%s %s\r\n", res.Key, res.Data))...)
+	// Format final response
+	var responseArray [][]byte
+	responseArray = append(responseArray, []byte("OK"))
+
+	// Convert map to array of results
+	for _, result := range resultMap {
+		responseArray = append(responseArray, []byte(fmt.Sprintf("%s %s", result.Key, result.Data)))
 	}
 
-	return results, nil
+	// Join with CRLF
+	response := bytes.Join(responseArray, []byte("\r\n"))
+	response = append(response, []byte("\r\n")...)
+
+	return response, nil
 }
 
 // WriteToNode writes to a primary node in sequence
 // Always starts at 0 and goes up to connected node count
 func (c *Cluster) WriteToNode(data []byte) ([]byte, error) {
-
-	seq := c.Sequence.Load()
-
-	// If there is just one node, we don't care for sequence
+	// Handle single node case first
 	if len(c.NodeConnections) == 1 {
-		c.Logger.Info("single node, add more to scale")
-		nodeConn := c.NodeConnections[0]
 
-		if !nodeConn.Health && nodeConn.Context == nil && nodeConn.Client == nil {
+		nodeConn := c.NodeConnections[0]
+		if !nodeConn.Health {
 			return nil, fmt.Errorf("node is down")
 		}
-
-		// We send the data to the node
-		err := nodeConn.Client.Send(nodeConn.Context, data)
-		if err != nil {
-			return nil, err
-		}
-
-		// We receive the response
-		response, err := nodeConn.Client.Receive(nodeConn.Context)
-		if err != nil {
-			return nil, err
-		}
-
-		return response, nil
-
+		return c.sendToNode(nodeConn, data)
 	}
 
-	c.Logger.Info("sequence", "seq", seq)
+	// Try writing to nodes starting from current sequence
+	startSeq := c.Sequence.Load()
+	attempts := 0
+	maxAttempts := len(c.NodeConnections)
 
-	nodeConn := c.NodeConnections[seq]
+	for attempts < maxAttempts {
+		seq := (startSeq + int32(attempts)) % int32(len(c.NodeConnections))
+		nodeConn := c.NodeConnections[seq]
 
-	if seq == int32(len(c.NodeConnections))-1 { // We reset the sequence if we reach the end
-		seq = 0
-		c.Sequence.Store(seq)
-	} else {
-		// We increment the sequence
-		seq++
-		c.Sequence.Store(seq)
-	}
-
-	if !nodeConn.Health && nodeConn.Context == nil && nodeConn.Client == nil {
-
-		// Recursively call the function
-		response, err := c.WriteToNode(data)
-		if err != nil {
-			return nil, err
+		if nodeConn.Health {
+			response, err := c.sendToNode(nodeConn, data)
+			if err == nil {
+				// Only update sequence on successful write
+				c.Sequence.Store((seq + 1) % int32(len(c.NodeConnections)))
+				return response, nil
+			}
 		}
 
-		return response, nil
+		attempts++
 	}
 
-	// We send the data to the node
-	err := nodeConn.Client.Send(nodeConn.Context, data)
-	if err != nil {
+	return nil, fmt.Errorf("no healthy nodes available")
+}
 
-		// Recursively call the function
-		response, err := c.WriteToNode(data)
-		if err != nil {
-			return nil, err
-		}
-
-		return response, nil
-	}
-
-	// We receive the response
-	response, err := nodeConn.Client.Receive(nodeConn.Context)
-	if err != nil {
-
+// sendToNode sends data to a node and returns the response
+func (c *Cluster) sendToNode(nodeConn *NodeConnection, data []byte) ([]byte, error) {
+	if err := nodeConn.Client.Send(nodeConn.Context, data); err != nil {
 		return nil, err
 	}
-
-	return response, nil
-
+	return nodeConn.Client.Receive(nodeConn.Context)
 }
 
 // ReloadConfig reloads a config file and propagates updates the cluster and all nodes in the chain
 func (c *Cluster) ReloadConfig() error {
 	c.ConfigLock.Lock()
 	defer c.ConfigLock.Unlock()
-	// We open the existing config file
+
+	// Open the existing config file
 	config, err := openExistingConfigFile(c.Wd)
 	if err != nil {
 		return err
 	}
 
-	// We update the cluster config
+	// Update the cluster config
 	c.Config = config
 
-	// We update the server config
+	// Update the server config
 	c.Server.Config = config.ServerConfig
 
-	for _, nodeConfig := range config.NodeConfigs {
-		// We check if the node connection already exists
-		var exists bool
-		for _, nodeConn := range c.NodeConnections {
-			if nodeConn.Config.Node.ServerAddress == nodeConfig.Node.ServerAddress {
-				exists = true
-				break
-			}
-		}
+	// We need to lock the node connections list before modifying it
+	c.NodeConnectionsLock.Lock()
+	defer c.NodeConnectionsLock.Unlock()
 
-		if exists {
+	// Track existing node connections by server address for faster lookup
+	existingNodes := make(map[string]*NodeConnection)
+	for _, nodeConn := range c.NodeConnections {
+		existingNodes[nodeConn.Config.Node.ServerAddress] = nodeConn
+	}
+
+	// Add new nodes that don't exist in current connections
+	for _, nodeConfig := range config.NodeConfigs {
+		serverAddr := nodeConfig.Node.ServerAddress
+
+		if _, exists := existingNodes[serverAddr]; exists {
+			// Node already exists, skip
 			continue
 		}
 
+		// Create new node connection
 		nodeConn := &NodeConnection{
 			Config: nodeConfig,
+			Health: false,
+			Lock:   &sync.Mutex{},
 		}
 
+		// Add replicas
+		for _, replicaConfig := range nodeConfig.Replicas {
+			replicaConn := &ReplicaConnection{
+				Config: replicaConfig,
+				Health: false,
+				Lock:   &sync.Mutex{},
+			}
+			nodeConn.Replicas = append(nodeConn.Replicas, replicaConn)
+		}
+
+		// Add to connections list
 		c.NodeConnections = append(c.NodeConnections, nodeConn)
 	}
 
-	// Now we find what nodes to remove
-	var remove []int
-	for i, nodeConn := range c.NodeConnections {
-		var found bool
-		for _, nodeConfig := range config.NodeConfigs {
-			if nodeConn.Config.Node.ServerAddress == nodeConfig.Node.ServerAddress {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			remove = append(remove, i)
-		}
+	// Create a set of server addresses in the new config for fast lookup
+	newConfigNodes := make(map[string]bool)
+	for _, nodeConfig := range config.NodeConfigs {
+		newConfigNodes[nodeConfig.Node.ServerAddress] = true
 	}
 
-	// We remove the nodes
-	for _, i := range remove {
-		// We close the client
-		if c.NodeConnections[i].Client != nil {
-			err = c.NodeConnections[i].Client.Close()
-			if err != nil {
-				return err
-			}
-		}
-		c.NodeConnections = append(c.NodeConnections[:i], c.NodeConnections[i+1:]...)
-	}
-
-	// Send RELOAD command to all nodes
+	// Find and remove nodes that no longer exist in the config
+	var updatedConnections []*NodeConnection
 	for _, nodeConn := range c.NodeConnections {
-		if nodeConn.Health {
-			err = nodeConn.Client.Send(nodeConn.Context, []byte("RCNF\r\n"))
-			if err != nil {
-				return err
-			}
-
-			for _, replicaConn := range nodeConn.Replicas {
-				if replicaConn.Health {
-					err = replicaConn.Client.Send(replicaConn.Context, []byte("RCNF\r\n"))
-					if err != nil {
-						return err
-					}
+		if !newConfigNodes[nodeConn.Config.Node.ServerAddress] {
+			// Node no longer in config, close and skip
+			if nodeConn.Client != nil && nodeConn.Health {
+				nodeConn.Lock.Lock()
+				if err := nodeConn.Client.Close(); err != nil {
+					c.Logger.Warn("error closing node client",
+						"error", err,
+						"node", nodeConn.Config.Node.ServerAddress)
 				}
+				nodeConn.Lock.Unlock()
 			}
+		} else {
+			// Keep this node
+			updatedConnections = append(updatedConnections, nodeConn)
 		}
 	}
 
-	return nil
+	// Update connections list
+	c.NodeConnections = updatedConnections
+
+	// Send RCNF command to all nodes - must be done after releasing the NodeConnectionsLock
+	// to avoid potential deadlocks
+	c.NodeConnectionsLock.Unlock()
+	defer c.NodeConnectionsLock.Lock() // Reacquire before returning
+
+	var reloadErr error
+	wg := sync.WaitGroup{}
+
+	// Send reload command to all nodes in parallel
+	for _, nodeConn := range updatedConnections {
+		if !nodeConn.Health {
+			continue
+		}
+
+		wg.Add(1)
+		go func(nc *NodeConnection) {
+			defer wg.Done()
+
+			nc.Lock.Lock()
+			defer nc.Lock.Unlock()
+
+			if !nc.Health {
+				return
+			}
+
+			if err := nc.Client.Send(nc.Context, []byte("RCNF\r\n")); err != nil {
+				c.Logger.Warn("failed to send reload command",
+					"error", err,
+					"node", nc.Config.Node.ServerAddress)
+				reloadErr = err
+				return
+			}
+
+			// Receive response but don't block on errors
+			_, _ = nc.Client.Receive(nc.Context)
+
+			// Send to replicas
+			for _, replicaConn := range nc.Replicas {
+				if !replicaConn.Health {
+					continue
+				}
+
+				replicaConn.Lock.Lock()
+				if err := replicaConn.Client.Send(replicaConn.Context, []byte("RCNF\r\n")); err != nil {
+					c.Logger.Warn("failed to send reload command to replica",
+						"error", err,
+						"replica", replicaConn.Config.ServerAddress)
+					replicaConn.Lock.Unlock()
+					continue
+				}
+
+				// Receive response but don't block on errors
+				_, _ = replicaConn.Client.Receive(replicaConn.Context)
+				replicaConn.Lock.Unlock()
+			}
+		}(nodeConn)
+	}
+
+	// Wait for all reload commands to complete
+	wg.Wait()
+
+	return reloadErr
 }

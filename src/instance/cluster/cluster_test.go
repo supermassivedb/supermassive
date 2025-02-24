@@ -34,10 +34,13 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"io/ioutil"
+	"log"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"supermassive/instance/node"
 	"supermassive/network/client"
 	"supermassive/network/server"
 	"testing"
@@ -1071,5 +1074,283 @@ func TestServerDecrNoPrimaries(t *testing.T) {
 
 	conn.Close()
 	nr.Close()
+
+}
+
+// We test the server with multiple primaries and no replicas
+// writing data and verifying it's existence
+func TestServerCrudMultiplePrimaries(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	var shard1, shard2 *node.Node // 2 primaries, no replicas
+
+	go func() {
+		config := &node.Config{
+			HealthCheckInterval: 2,
+			MaxMemoryThreshold:  75,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4005",
+				UseTLS:      false,
+				CertFile:    "",
+				KeyFile:     "",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+			ReadReplicas: nil,
+		}
+
+		// We create temp shard1 directory
+		shard1Dir, err := ioutil.TempDir("", "shard1")
+		if err != nil {
+			t.Fatalf("Failed to create temp directory: %v", err)
+		}
+
+		// Marshal yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write new config file for primary
+		err = os.WriteFile(fmt.Sprintf("%s/.node", shard1Dir), data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		shard1, err = node.New(logger, "test-key")
+		if err != nil {
+			t.Fatalf("Failed to create node: %v", err)
+		}
+
+		//shard1.Config = config
+
+		err = shard1.Open(&shard1Dir)
+		if err != nil {
+			t.Fatalf("Failed to open node: %v", err)
+		}
+
+	}()
+
+	go func() {
+		config := &node.Config{
+			HealthCheckInterval: 2,
+			MaxMemoryThreshold:  75,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4006",
+				UseTLS:      false,
+				CertFile:    "",
+				KeyFile:     "",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+			ReadReplicas: nil,
+		}
+
+		// We create temp shard1 directory
+		shard2Dir, err := ioutil.TempDir("", "shard2")
+		if err != nil {
+			t.Fatalf("Failed to create temp directory: %v", err)
+		}
+
+		// Marshal yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write new config file for primary
+		err = os.WriteFile(fmt.Sprintf("%s/.node", shard2Dir), data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		shard2, err = node.New(logger, "test-key")
+		if err != nil {
+			t.Fatalf("Failed to create node: %v", err)
+		}
+
+		err = shard2.Open(&shard2Dir)
+		if err != nil {
+			t.Fatalf("Failed to open node: %v", err)
+		}
+
+	}()
+
+	time.Sleep(time.Second) // Wait for primaries to open
+
+	//We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	//We open cluster in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 1,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4004",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+			NodeConfigs: []*NodeConfig{
+				{
+					Node: &client.Config{
+						ServerAddress:  "localhost:4005",
+						UseTLS:         false,
+						ConnectTimeout: 5,
+						WriteTimeout:   5,
+						ReadTimeout:    5,
+						MaxRetries:     3,
+						RetryWaitTime:  1,
+						BufferSize:     1024,
+					},
+				},
+				{
+					Node: &client.Config{
+						ServerAddress:  "localhost:4006",
+						UseTLS:         false,
+						ConnectTimeout: 5,
+						WriteTimeout:   5,
+						ReadTimeout:    5,
+						MaxRetries:     3,
+						RetryWaitTime:  1,
+						BufferSize:     1024,
+					},
+				},
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(4 * time.Second) // Wait for cluster to start and connect to primaries
+
+	defer os.Remove(".cluster")
+
+	log.Println(shard2.SharedKey)
+	log.Println(shard1.SharedKey)
+	log.Println(nr.SharedKey)
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4004")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	for i := 0; i < 10; i++ {
+		_, err = conn.Write([]byte(fmt.Sprintf("PUT hello%d world\r\n", i)))
+		if err != nil {
+			conn.Close()
+			shard1.Close()
+			shard2.Close()
+			nr.Close()
+			t.Fatalf("Failed to write: %v", err)
+		}
+
+		buf = make([]byte, 1024)
+
+		n, err = conn.Read(buf)
+		if err != nil {
+			conn.Close()
+			shard1.Close()
+			shard2.Close()
+			nr.Close()
+			t.Fatalf("Failed to read response: %v", err)
+		}
+
+		if !strings.HasPrefix(string(buf[:n]), "OK") {
+			conn.Close()
+			shard1.Close()
+			shard2.Close()
+			nr.Close()
+			t.Fatalf("Expected 'OK', got %s", string(buf[:n]))
+		}
+	}
+
+	// We verify the data
+	for i := 0; i < 10; i++ {
+		_, err = conn.Write([]byte(fmt.Sprintf("GET hello%d\r\n", i)))
+		if err != nil {
+			conn.Close()
+			shard1.Close()
+			shard2.Close()
+			nr.Close()
+			t.Fatalf("Failed to write: %v", err)
+		}
+
+		buf = make([]byte, 1024)
+
+		n, err = conn.Read(buf)
+		if err != nil {
+			conn.Close()
+			shard1.Close()
+			shard2.Close()
+			nr.Close()
+			t.Fatalf("Failed to read response: %v", err)
+		}
+
+		if !strings.HasPrefix(string(buf[:n]), "OK") {
+			conn.Close()
+			shard1.Close()
+			shard2.Close()
+			nr.Close()
+			t.Fatalf("Expected 'OK', got %s", string(buf[:n]))
+		}
+	}
+
+	conn.Close()
+	nr.Close()
+	shard1.Close()
+	shard2.Close()
 
 }

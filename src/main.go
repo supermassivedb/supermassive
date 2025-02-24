@@ -39,7 +39,12 @@ import (
 	"syscall"
 )
 
+// The system starts here
+// You can start SuperMassive as a cluster, node(primary shard) or node-replica(replica of primary shard)
 func main() {
+
+	// Variables for the flags
+	// They are string pointers..
 	instanceTypeFlag := flag.String("instance-type", "cluster", "cluster|node|node-replica")
 	sharedKeyFlag := flag.String("shared-key", "", "shared key for cluster to node, node to node replica communication.")
 
@@ -47,6 +52,7 @@ func main() {
 	usernameFlag := flag.String("username", "", "username for client to cluster communication.")
 	passwordFlag := flag.String("password", "", "password for client to cluster communication.")
 
+	// Parse the flags
 	flag.Parse()
 
 	// When starting an instance
@@ -55,10 +61,13 @@ func main() {
 	// node has a .node which is in yaml format
 	// node-replica has a .node-replica which is in yaml format
 
+	// We create a channel for os signals
 	sig := make(chan os.Signal, 1)
 
+	// We set that channel to listen for SIGINT and SIGTERM signals
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
+	// We create a logger for the instance, this gets passed onto internal server and client instances
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// Shared key is required for all instances
@@ -68,22 +77,25 @@ func main() {
 
 	}
 
+	// Switch for instance type
 	switch *instanceTypeFlag {
 	case "cluster":
 		logger.Info("Starting cluster instance")
 
-		// Check username and password
+		// Check username and password, this is required for cluster instance
 		if *usernameFlag == "" || *passwordFlag == "" {
 			logger.Error("Username and password are required for cluster instance")
 			os.Exit(1)
 		}
 
+		// We cluster, duh
 		c, err := cluster.New(logger, *sharedKeyFlag, *usernameFlag, *passwordFlag)
 		if err != nil {
 			logger.Error("Error creating cluster instance", err)
 			os.Exit(1)
 		}
 
+		// We use Open method in background as it blocks
 		go func() {
 			err := c.Open()
 			if err != nil {
@@ -92,8 +104,11 @@ func main() {
 			}
 		}()
 
-		<-sig
+		<-sig // We wait for the signal to shutdown
+
 		logger.Info("Shutting down cluster instance")
+
+		// We close the cluster instance
 		err = c.Close()
 		if err != nil {
 			logger.Error("Error shutting down cluster instance", err)
@@ -103,12 +118,14 @@ func main() {
 	case "node":
 		logger.Info("Starting node instance")
 
+		// We create a node instance
 		n, err := node.New(logger, *sharedKeyFlag)
 		if err != nil {
 			logger.Error("Error creating node instance", err)
 			os.Exit(1)
 		}
 
+		// We use Open method in background as it blocks
 		go func() {
 			err := n.Open(nil)
 			if err != nil {
@@ -117,8 +134,10 @@ func main() {
 			}
 		}()
 
-		<-sig
+		<-sig // We wait for the signal to shutdown
 		logger.Info("Shutting down node instance")
+
+		// We close the node instance
 		err = n.Close()
 		if err != nil {
 			logger.Error("Error shutting down node instance", err)
@@ -127,12 +146,14 @@ func main() {
 	case "node-replica":
 		logger.Info("Starting node replica instance")
 
+		// We create a node replica instance
 		nr, err := nodereplica.New(logger, *sharedKeyFlag)
 		if err != nil {
 			logger.Error("Error creating node replica instance", err)
 			os.Exit(1)
 		}
 
+		// We use Open method in background as it blocks
 		go func() {
 			err := nr.Open(nil)
 			if err != nil {
@@ -141,8 +162,10 @@ func main() {
 			}
 		}()
 
-		<-sig
+		<-sig // We wait for the signal to shutdown
 		logger.Info("Shutting down node replica instance")
+
+		// We close the node replica instance
 		err = nr.Close()
 		if err != nil {
 			logger.Error("Error shutting down node replica instance", err)

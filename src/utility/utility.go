@@ -30,7 +30,7 @@ package utility
 
 import "runtime"
 
-// GetCurrentMemoryUsage returns the current memory usage of the system in bytes
+// GetCurrentMemoryUsage returns the current memory usage of the system(the running SuperMassive instance) in bytes
 func GetCurrentMemoryUsage() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)

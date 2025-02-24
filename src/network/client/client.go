@@ -40,22 +40,22 @@ import (
 
 // Config is the TCP/TLS client configuration
 type Config struct {
-	ServerAddress  string `yaml:"server-address"`
-	UseTLS         bool   `yaml:"use-tls"`
-	CACertFile     string `yaml:"ca-cert-file"`
-	ConnectTimeout int    `yaml:"connect-timeout"`
-	WriteTimeout   int    `yaml:"write-timeout"`
-	ReadTimeout    int    `yaml:"read-timeout"`
-	MaxRetries     int    `yaml:"max-retries"`
-	RetryWaitTime  int    `yaml:"retry-wait-time"`
-	BufferSize     int    `yaml:"buffer-size"`
+	ServerAddress  string `yaml:"server-address"`  // The server address the client will connect to
+	UseTLS         bool   `yaml:"use-tls"`         // Will the client use TLS?
+	CACertFile     string `yaml:"ca-cert-file"`    // The CA cert file to use for TLS
+	ConnectTimeout int    `yaml:"connect-timeout"` // If the server doesn't connect in this time, the client will retry
+	WriteTimeout   int    `yaml:"write-timeout"`   // Write timeout for connection to server
+	ReadTimeout    int    `yaml:"read-timeout"`    // Read timeout for connection to server
+	MaxRetries     int    `yaml:"max-retries"`     // Max retries for connection
+	RetryWaitTime  int    `yaml:"retry-wait-time"` // Time to wait between retries
+	BufferSize     int    `yaml:"buffer-size"`     // Buffer size for reading/writing data, this is the minimum size
 }
 
 // Client main struct
 type Client struct {
-	Config *Config
-	Conn   net.Conn
-	Logger *slog.Logger
+	Config *Config      // Client configuration
+	Conn   net.Conn     // Connection to the server
+	Logger *slog.Logger // Logger
 }
 
 // New creates a new client
@@ -66,6 +66,7 @@ func New(config *Config, logger *slog.Logger) *Client {
 	}
 }
 
+// GetConn get's the client server's underlying connection
 func (c *Client) GetConn() net.Conn {
 	return c.Conn
 }

@@ -41,6 +41,9 @@ import (
 // Operation is a journal operation
 type Operation int
 
+// We define the operations that can be stored in the journal
+// We only care about PUT, DEL, INCR, DECR
+// These operations are used to recover the state of a node's hashtable on startup
 const (
 	PUT Operation = iota
 	DEL
@@ -50,16 +53,16 @@ const (
 
 // Entry is a journal entry
 type Entry struct {
-	Key   string
-	Value string
-	Op    Operation
+	Key   string    // The key for the entry
+	Value string    // The value for the entry
+	Op    Operation // The operation for the entry
 }
 
 // Journal is a journal for node and node-replica instances
 // Used to store PUT, DEL, INCR, DECR operations, and recover the state of the hashtable on startup if configured
 type Journal struct {
-	Pager *pager.Pager
-	Lock  *sync.Mutex
+	Pager *pager.Pager // The journals underlying pager
+	Lock  *sync.Mutex  // The journals lock
 }
 
 // Open opens a journal file
@@ -132,7 +135,7 @@ func (j *Journal) Recover(ht *hashtable.HashTable) error {
 	return nil
 }
 
-// serialize serializes an Entry into a byte slice
+// Serialize serializes an Entry into a byte slice
 func Serialize(e Entry) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -143,7 +146,7 @@ func Serialize(e Entry) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// deserialize deserializes a byte slice into an Entry
+// Deserialize deserializes a byte slice into an Entry
 func Deserialize(b []byte) (*Entry, error) {
 	var e Entry
 	buf := bytes.NewBuffer(b)

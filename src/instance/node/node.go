@@ -81,9 +81,10 @@ type Node struct {
 
 // ReplicaConnection is the connection to a read replica
 type ReplicaConnection struct {
-	Client  *client.Client  // Is the connection to the master node
-	Health  bool            // Is the health status of the node
-	Context context.Context // Is the context for the node
+	Client  *client.Client  // Is the connection to the replica
+	Health  bool            // Is the health status of the replica connection
+	Context context.Context // Is the context for the replica connection
+	Lock    *sync.Mutex     // Is the lock for the replica connection
 }
 
 // ServerConnectionHandler is the handler for the server connections
@@ -162,6 +163,7 @@ func (n *Node) Open(dir *string) error {
 		replicaConn := &ReplicaConnection{
 			Client: client.New(replicaConfig, n.Logger),
 			Health: false,
+			Lock:   &sync.Mutex{},
 		}
 
 		n.ReplicaConnections = append(n.ReplicaConnections, replicaConn)
@@ -300,7 +302,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 
 	for {
 
-		_ = conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{}) // Disable read deadline
 
 		n, err := conn.Read(buffer)
 		if err != nil {
@@ -327,6 +329,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		command = bytes.TrimSuffix(command, []byte("\r\n"))
 
 		switch {
+		// A cluster authenticating
 		case strings.HasPrefix(string(command), "NAUTH"):
 
 			if !authenticated {
@@ -402,7 +405,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					return
 				}
 				h.Node.Lock.RUnlock()
-				return
+				continue
 			}
 
 			for i, entry := range entries {
@@ -447,11 +450,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			key := strings.Split(string(command), " ")[1]
 			value := strings.Join(strings.Split(string(command), " ")[2:], " ")
 
-			// We lock the node
-			h.Node.Lock.Lock()
-
-			h.Node.Storage.Put(key, value)
-
 			go func() {
 				err := h.Node.Journal.Append(key, value, journal.PUT)
 				if err != nil {
@@ -459,10 +457,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				}
 			}()
 
-			// We relay to the read replicas
-			h.Node.relayToReplicas(string(command))
+			// We lock the node
+			h.Node.Lock.Lock()
+
+			h.Node.Storage.Put(key, value)
+
 			// We unlock the node
 			h.Node.Lock.Unlock()
+
+			// We relay to the read replicas
+			h.Node.relayToReplicas(string(command))
 
 			_, err = conn.Write([]byte("OK key-value written\r\n"))
 			if err != nil {
@@ -518,19 +522,19 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			// We delete the data
 			key := strings.Split(string(command), " ")[1]
 
+			go func() {
+				err := h.Node.Journal.Append(key, "", journal.DEL)
+				if err != nil {
+					h.Node.Logger.Warn("journal append error", "error", err)
+				}
+			}()
+
 			// We get lock
 			h.Node.Lock.Lock()
 
 			ok := h.Node.Storage.Delete(key)
 
 			if ok {
-				go func() {
-					err := h.Node.Journal.Append(key, "", journal.DEL)
-					if err != nil {
-						h.Node.Logger.Warn("journal append error", "error", err)
-					}
-				}()
-
 				// We release lock
 				h.Node.Lock.Unlock()
 
@@ -572,8 +576,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
-				return
+				continue
 			}
+
+			go func() {
+				err = h.Node.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
+				if err != nil {
+					h.Node.Logger.Warn("journal append error", "error", err)
+				}
+			}()
 
 			// We get lock
 			h.Node.Lock.Lock()
@@ -587,14 +598,8 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					return
 				}
 				h.Node.Lock.Unlock()
-				return
+				continue
 			}
-			go func() {
-				err = h.Node.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
-				if err != nil {
-					h.Node.Logger.Warn("journal append error", "error", err)
-				}
-			}()
 
 			h.Node.Lock.Unlock()
 
@@ -626,8 +631,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.Node.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
-				return
+				continue
 			}
+
+			go func() {
+				err = h.Node.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
+				if err != nil {
+					h.Node.Logger.Warn("journal append error", "error", err)
+				}
+			}()
 
 			// We get lock
 			h.Node.Lock.Lock()
@@ -643,12 +655,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.Node.Lock.Unlock()
 				return
 			}
-			go func() {
-				err = h.Node.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
-				if err != nil {
-					h.Node.Logger.Warn("journal append error", "error", err)
-				}
-			}()
 
 			h.Node.Lock.Unlock()
 
@@ -746,7 +752,7 @@ func (n *Node) backgroundHealthChecks() {
 		case <-ticker.C:
 
 			for _, replicaConn := range n.ReplicaConnections {
-				n.Lock.RLock()
+				replicaConn.Lock.Lock()
 				if !replicaConn.Health {
 
 					n.Logger.Warn("node replica is unhealthy", "replica", replicaConn.Client.Config.ServerAddress)
@@ -760,7 +766,7 @@ func (n *Node) backgroundHealthChecks() {
 
 					if err := replicaConn.Client.Connect(replicaConn.Context); err != nil {
 						n.Logger.Warn("node connection error", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -768,14 +774,14 @@ func (n *Node) backgroundHealthChecks() {
 					err := replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("NAUTH %x\r\n", sharedKeyHash)))
 					if err != nil {
 						n.Logger.Warn("authentication error", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
 					response, err := replicaConn.Client.Receive(replicaConn.Context)
 					if err != nil || string(response) != "OK authenticated\r\n" {
 						n.Logger.Warn("authentication error", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -785,20 +791,20 @@ func (n *Node) backgroundHealthChecks() {
 					err = replicaConn.Client.Send(replicaConn.Context, []byte("STARTSYNC\r\n"))
 					if err != nil {
 						n.Logger.Warn("sync error", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
 					response, err = replicaConn.Client.Receive(replicaConn.Context)
 					if err != nil {
 						n.Logger.Warn("read error", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
 					command := strings.TrimSuffix(string(response), "\r\n")
 					if !strings.HasPrefix(command, "SYNCFROM") {
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -808,7 +814,7 @@ func (n *Node) backgroundHealthChecks() {
 						if err != nil {
 							n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
 						}
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -816,9 +822,11 @@ func (n *Node) backgroundHealthChecks() {
 					lastJournalPageInt, err := strconv.Atoi(lastJournalPage)
 					if err != nil {
 						n.Logger.Warn("invalid page number", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
+
+					n.Lock.RLock()
 
 					it, err := pager.NewIteratorAtPage(n.Journal.Pager, lastJournalPageInt)
 					if err != nil {
@@ -829,6 +837,7 @@ func (n *Node) backgroundHealthChecks() {
 							}
 							n.Logger.Warn("nothing to sync", "remote_addr", replicaConn.Client.Conn.RemoteAddr())
 							n.Lock.RUnlock()
+							replicaConn.Lock.Unlock()
 							continue
 						}
 						err = replicaConn.Client.Send(replicaConn.Context, []byte("ERR invalid command\r\n"))
@@ -836,6 +845,7 @@ func (n *Node) backgroundHealthChecks() {
 							n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
 						}
 						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -880,6 +890,8 @@ func (n *Node) backgroundHealthChecks() {
 
 					}
 
+					n.Lock.RUnlock()
+
 					err = replicaConn.Client.Send(replicaConn.Context, []byte("SYNCDONE\r\n"))
 					if err != nil {
 						n.Logger.Warn("write error", "error", err, "remote_addr", replicaConn.Client.Conn.RemoteAddr())
@@ -889,22 +901,24 @@ func (n *Node) backgroundHealthChecks() {
 					response, err = replicaConn.Client.Receive(replicaConn.Context)
 					if err != nil {
 						n.Logger.Warn("read error", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
 					if string(response) != "OK synced\r\n" {
 						n.Logger.Warn("unexpected response", "response", string(response))
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
+
+					replicaConn.Lock.Unlock()
 
 				} else {
 					// We create a temp connection to the replica using a new client
 					tempClient := client.New(replicaConn.Client.Config, n.Logger)
 					if err := tempClient.Connect(replicaConn.Context); err != nil {
 						n.Logger.Warn("node connection error", "error", err)
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -912,7 +926,7 @@ func (n *Node) backgroundHealthChecks() {
 					if err != nil {
 						replicaConn.Health = false
 						tempClient.Close()
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -921,7 +935,7 @@ func (n *Node) backgroundHealthChecks() {
 						n.Logger.Warn("read error", "error", err)
 						replicaConn.Health = false
 						tempClient.Close()
-						n.Lock.RUnlock()
+						replicaConn.Lock.Unlock()
 						continue
 					}
 
@@ -931,8 +945,7 @@ func (n *Node) backgroundHealthChecks() {
 					}
 
 					tempClient.Close()
-					n.Lock.RUnlock()
-
+					replicaConn.Lock.Unlock()
 				}
 
 			}
@@ -943,13 +956,15 @@ func (n *Node) backgroundHealthChecks() {
 // relayToReplicas relays the command to the read replicas
 func (n *Node) relayToReplicas(command string) {
 	for _, replicaConn := range n.ReplicaConnections {
+		replicaConn.Lock.Lock()
+
 		if replicaConn.Health {
 			// We send the command to the replica
 			err := replicaConn.Client.Send(replicaConn.Context, []byte(fmt.Sprintf("%s\r\n", command)))
 			if err != nil {
 				n.Logger.Warn("write error", "error", err)
 				replicaConn.Health = false
-
+				replicaConn.Lock.Unlock()
 				continue
 			}
 
@@ -958,11 +973,13 @@ func (n *Node) relayToReplicas(command string) {
 			if err != nil {
 				n.Logger.Warn("read error", "error", err)
 				replicaConn.Health = false
-
+				replicaConn.Lock.Unlock()
 				continue
 			}
 
 		}
+
+		replicaConn.Lock.Unlock()
 
 	}
 }
@@ -1017,6 +1034,7 @@ func (n *Node) ReloadConfig() error {
 		replicaConn := &ReplicaConnection{
 			Client: client.New(replicaConfig, n.Logger),
 			Health: false,
+			Lock:   &sync.Mutex{},
 		}
 
 		n.ReplicaConnections = append(n.ReplicaConnections, replicaConn)

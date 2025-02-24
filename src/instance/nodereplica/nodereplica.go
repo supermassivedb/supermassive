@@ -144,13 +144,14 @@ func (nr *NodeReplica) Open(dir *string) error {
 		ReadTimeout: nr.Config.ServerConfig.ReadTimeout,
 	})
 
+	// We open the journal file
 	nr.Journal, err = journal.Open(fmt.Sprintf("%s%s%s", wd, string(os.PathSeparator), JournalFile))
 	if err != nil {
 		return err
 	}
 
 	// We recover from journal
-	// Populates the storage with the journal data
+	// Populates the in-memory storage with the journal data
 	if err = nr.Journal.Recover(nr.Storage); err != nil {
 		return err
 	}
@@ -172,6 +173,7 @@ func (nr *NodeReplica) Close() error {
 		return err
 	}
 
+	// We close the journal
 	err = nr.Journal.Close()
 	if err != nil {
 		return err
@@ -245,11 +247,11 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 	buffer := make([]byte, h.BufferSize)
 	var tempBuffer []byte // Temporary buffer to store data (larger than buffer)
 
-	authenticated := false // Is the connection authenticated
+	authenticated := false // Is the connection authenticated?
 
 	for {
 
-		_ = conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{}) // Unlimit the read deadline
 
 		n, err := conn.Read(buffer)
 		if err != nil {
@@ -276,10 +278,13 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 		command = bytes.TrimSuffix(command, []byte("\r\n"))
 
 		switch {
+		// Handle primary to this node replica authentication
 		case strings.HasPrefix(string(command), "NAUTH"):
 
+			// If not authenticated?
 			if !authenticated {
 
+				// NAUTH <shared key> <crlf>
 				sharedKey := strings.Split(string(command), " ")[1]
 
 				// We hash the shared key
@@ -325,7 +330,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 
 			h.NodeReplica.Lock.Lock()
 
-			// Because this is a replica we send over SYNCFROM PG <last journal page number>
+			// Because this is a replica we send over SYNCFROM <last journal page number>
 			// We know the connected should be a primary node
 			// The primary will now send us missing pages
 			_, err = conn.Write([]byte(fmt.Sprintf("SYNCFROM %d\r\n", h.NodeReplica.Journal.Pager.LastPage())))
@@ -399,7 +404,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					return
 				}
 				h.NodeReplica.Lock.RUnlock()
-				return
+				continue
 			}
 
 			for i, entry := range entries {
@@ -454,16 +459,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			key := strings.Split(string(command), " ")[1]
 			value := strings.Join(strings.Split(string(command), " ")[2:], " ")
 
-			h.NodeReplica.Lock.Lock()
-			h.NodeReplica.Storage.Put(key, value)
-			h.NodeReplica.Lock.Unlock()
-
 			go func() {
 				err := h.NodeReplica.Journal.Append(key, value, journal.PUT)
 				if err != nil {
 					h.NodeReplica.Logger.Warn("journal append error", "error", err)
 				}
 			}()
+
+			h.NodeReplica.Lock.Lock()
+			h.NodeReplica.Storage.Put(key, value)
+			h.NodeReplica.Lock.Unlock()
 
 			_, err = conn.Write([]byte("OK key-value written\r\n"))
 			if err != nil {
@@ -514,18 +519,18 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			// We delete the data
 			key := strings.Split(string(command), " ")[1]
 
+			go func() {
+				err := h.NodeReplica.Journal.Append(key, "", journal.DEL)
+				if err != nil {
+					h.NodeReplica.Logger.Warn("journal append error", "error", err)
+				}
+			}()
+
 			h.NodeReplica.Lock.Lock()
 			ok := h.NodeReplica.Storage.Delete(key)
 			h.NodeReplica.Lock.Unlock()
 
 			if ok {
-
-				go func() {
-					err := h.NodeReplica.Journal.Append(key, "", journal.DEL)
-					if err != nil {
-						h.NodeReplica.Logger.Warn("journal append error", "error", err)
-					}
-				}()
 
 				_, err = conn.Write([]byte("OK key-value deleted\r\n"))
 				if err != nil {
@@ -558,8 +563,16 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
-				return
+				continue
 			}
+
+			go func() {
+				err = h.NodeReplica.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
+				if err != nil {
+					h.NodeReplica.Logger.Warn("journal append error", "error", err)
+				}
+			}()
+
 			h.NodeReplica.Lock.Lock()
 			val, ts, err := h.NodeReplica.Storage.Incr(key, strings.Split(string(command), " ")[2])
 			if err != nil {
@@ -570,17 +583,10 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					return
 				}
 				h.NodeReplica.Lock.Unlock()
-				return
+				continue
 			}
 
 			h.NodeReplica.Lock.Unlock()
-
-			go func() {
-				err = h.NodeReplica.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
-				if err != nil {
-					h.NodeReplica.Logger.Warn("journal append error", "error", err)
-				}
-			}()
 
 			_, err = conn.Write([]byte(fmt.Sprintf("OK %s %s %s\r\n", ts.Format(time.RFC3339), key, val)))
 			if err != nil {
@@ -607,8 +613,15 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					h.NodeReplica.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
-				return
+				continue
 			}
+
+			go func() {
+				err = h.NodeReplica.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
+				if err != nil {
+					h.NodeReplica.Logger.Warn("journal append error", "error", err)
+				}
+			}()
 
 			h.NodeReplica.Lock.Lock()
 
@@ -621,15 +634,10 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 					return
 				}
 				h.NodeReplica.Lock.Unlock()
-				return
+				continue
 			}
 
 			h.NodeReplica.Lock.Unlock()
-
-			err = h.NodeReplica.Journal.Append(key, strings.Split(string(command), " ")[2], journal.PUT)
-			if err != nil {
-				h.NodeReplica.Logger.Warn("journal append error", "error", err)
-			}
 
 			_, err = conn.Write([]byte(fmt.Sprintf("OK %s %s %s\r\n", ts.Format(time.RFC3339), key, val)))
 			if err != nil {

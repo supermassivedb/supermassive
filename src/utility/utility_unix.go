@@ -36,7 +36,7 @@ import (
 	"syscall"
 )
 
-// GetMaxMemory returns the total memory of the system in bytes
+// GetMaxMemory returns the total memory of the running system in bytes
 func GetMaxMemory() (uint64, error) {
 	var mem syscall.Sysinfo_t
 	err := syscall.Sysinfo(&mem)

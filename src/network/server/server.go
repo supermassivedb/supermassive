@@ -38,12 +38,12 @@ import (
 
 // Config is the TCP/TLS server configuration
 type Config struct {
-	Address     string `yaml:"address"`
-	UseTLS      bool   `yaml:"use-tls"`
-	CertFile    string `yaml:"cert-file"`
-	KeyFile     string `yaml:"key-file"`
-	ReadTimeout int    `yaml:"read-timeout"`
-	BufferSize  int    `yaml:"buffer-size"`
+	Address     string `yaml:"address"`      // The address the server will listen on
+	UseTLS      bool   `yaml:"use-tls"`      // Will the server use TLS?
+	CertFile    string `yaml:"cert-file"`    // What's the cert file for the server?
+	KeyFile     string `yaml:"key-file"`     // What's the key file for the server?
+	ReadTimeout int    `yaml:"read-timeout"` // Read timeout for connections
+	BufferSize  int    `yaml:"buffer-size"`  // Buffer size for reading/writing data, this is the minimum size
 }
 
 // ConnectionHandler is an interface for handling connections
@@ -53,14 +53,14 @@ type ConnectionHandler interface {
 
 // Server main struct
 type Server struct {
-	Config     *Config
-	Listener   net.Listener
-	Wg         sync.WaitGroup
-	ShutdownCh chan struct{}
-	Logger     *slog.Logger
-	ConnCount  int64
-	ConnMutex  sync.Mutex
-	Handler    ConnectionHandler
+	Config     *Config           // Server configuration
+	Listener   net.Listener      // Listener for incoming connections
+	Wg         sync.WaitGroup    // Wait group for connections
+	ShutdownCh chan struct{}     // Shutdown channel
+	Logger     *slog.Logger      // Logger
+	ConnCount  int64             // Connection count
+	ConnMutex  sync.Mutex        // Mutex for connection count
+	Handler    ConnectionHandler // The assigned connection handler
 }
 
 // New creates a new server

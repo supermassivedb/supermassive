@@ -5,7 +5,7 @@
 SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tolerant, and self-healing key-value database.
 
 > [!IMPORTANT]
-> SuperMassive is in active development and is not ready for production use.
+> SuperMassive is in active beta development and is not ready for production use.
 
 ## Features
 
