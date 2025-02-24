@@ -481,9 +481,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			// We get base64 encoded "username\0password"
 			credentials := bytes.TrimSuffix(bytes.Split(command, []byte(" "))[1], []byte("\r\n"))
 
-			// print credentials
-			fmt.Println(string(credentials))
-
 			decoded, err := base64.StdEncoding.DecodeString(string(credentials))
 			if err != nil {
 				_, err = conn.Write([]byte("ERR invalid credentials\r\n"))

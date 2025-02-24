@@ -34,7 +34,6 @@ import (
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
-	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -402,8 +401,6 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				h.NodeReplica.Lock.RUnlock()
 				return
 			}
-
-			log.Println(entries)
 
 			for i, entry := range entries {
 				if i == 0 {
