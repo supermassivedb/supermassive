@@ -21,3 +21,5 @@ src/.node
 src/.nodereplica
 src/.cluster
 src/.journal
+bin/*
+bin

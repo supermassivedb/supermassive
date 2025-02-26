@@ -1,5 +1,5 @@
-//go:build windows
-// +build windows
+//go:build darwin
+// +build darwin
 
 // BSD 3-Clause License
 //
@@ -29,41 +29,17 @@
 // CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 package utility
 
 import (
-	"golang.org/x/sys/windows"
-	"unsafe"
+	"golang.org/x/sys/unix"
 )
 
-// MEMORYSTATUSEX structure (for GlobalMemoryStatusEx)
-type MEMORYSTATUSEX struct {
-	Length               uint32
-	MemoryLoad           uint32
-	TotalPhys            uint64
-	AvailPhys            uint64
-	TotalPageFile        uint64
-	AvailPageFile        uint64
-	TotalVirtual         uint64
-	AvailVirtual         uint64
-	AvailExtendedVirtual uint64
-}
-
-// GetMaxMemory returns the total physical memory in bytes for Windows
 func GetMaxMemory() (uint64, error) {
-	// Prepare the structure
-	memStatus := MEMORYSTATUSEX{}
-	memStatus.Length = uint32(unsafe.Sizeof(memStatus))
-
-	// We load kernel32.dll and the proc
-	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	procGlobalMemoryStatusEx := kernel32.NewProc("GlobalMemoryStatusEx")
-
-	// We call the proc
-	ret, _, err := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&memStatus)))
-	if ret == 0 {
+	memsize, err := unix.SysctlUint64("hw.memsize")
+	if err != nil {
 		return 0, err
 	}
-
-	return memStatus.TotalPhys, nil
+	return memsize, nil
 }

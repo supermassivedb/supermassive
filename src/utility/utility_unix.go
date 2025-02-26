@@ -1,7 +1,5 @@
-//go:build !windows
-// +build !windows
-
-package utility
+//go:build linux
+// +build linux
 
 // BSD 3-Clause License
 //
@@ -32,18 +30,17 @@ package utility
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+package utility
+
 import (
-	"syscall"
+	"golang.org/x/sys/unix"
 )
 
 // GetMaxMemory returns the total memory of the running system in bytes
 func GetMaxMemory() (uint64, error) {
-	var mem syscall.Sysinfo_t
-	err := syscall.Sysinfo(&mem)
-	if err != nil {
+	var mem unix.Sysinfo_t
+	if err := unix.Sysinfo(&mem); err != nil {
 		return 0, err
 	}
-
-	totalMemory := mem.Totalram * uint64(mem.Unit) // in bytes
-	return totalMemory, nil
+	return uint64(mem.Totalram) * uint64(mem.Unit), nil
 }
