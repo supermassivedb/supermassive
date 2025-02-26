@@ -41,11 +41,13 @@ for platform in "${PLATFORMS[@]}"; do
   # Build command
   (cd src && GOOS="$GOOS" GOARCH="$GOARCH" go build -o "../$OUTPUT_DIR/$OUTPUT_FILE$EXT")
 
+  ARCHIVE_NAME="supermassive-${VERSION}-${GOOS}-${GOARCH}${ARCHIVE_EXT}"
+
   # Archive the build
   if [[ "$GOOS" == "windows" ]]; then
-    zip -j "bin/${GOOS}/${GOARCH}/supermassive-${VERSION}-${GOARCH}.zip" "$OUTPUT_DIR/$OUTPUT_FILE$EXT"
+    zip -j "bin/${GOOS}/${GOARCH}/${ARCHIVE_NAME}" "$OUTPUT_DIR/$OUTPUT_FILE$EXT"
   else
-    tar -czf "bin/${GOOS}/${GOARCH}/supermassive-${VERSION}-${GOARCH}.tar.gz" -C "$OUTPUT_DIR" "$OUTPUT_FILE$EXT"
+    tar -czf "bin/${GOOS}/${GOARCH}/${ARCHIVE_NAME}" -C "$OUTPUT_DIR" "$OUTPUT_FILE$EXT"
   fi
 done
 
