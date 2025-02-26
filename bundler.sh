@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -e  # Exit on errors
-VERSION="v1.0.0BETA"
+VERSION="v1.0.1BETA"
 
 echo "BUILDING SUPERMASSIVE BINARIES"
 
