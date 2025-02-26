@@ -30,6 +30,10 @@ Join the SuperMassive Discord server to chat with the maintainers and other user
 
 ## Getting Started
 
+<div>
+    <h1 align="left"><img width="528" src="artwork/supermassive-netcat-example.gif"></h1>
+</div>
+
 You can use TLS for your client-cluster communication and cluster-node node-replica communication.  A cluster can be started with TLS and so can other instance types based on configuration files.
 
 When starting a cluster instance you provide a `--username` and `--password`.  When accessing through a client like netcat you now need to authenticate with `AUTH user\0password`.
