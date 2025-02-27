@@ -36,6 +36,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// GetMaxMemory returns the total memory of the running system in bytes
 func GetMaxMemory() (uint64, error) {
 	memsize, err := unix.SysctlUint64("hw.memsize")
 	if err != nil {
