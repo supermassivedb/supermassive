@@ -36,7 +36,10 @@ import (
 	"unsafe"
 )
 
+// https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-globalmemorystatusex
+
 // MEMORYSTATUSEX structure (for GlobalMemoryStatusEx)
+// https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex
 type MEMORYSTATUSEX struct {
 	Length               uint32
 	MemoryLoad           uint32
