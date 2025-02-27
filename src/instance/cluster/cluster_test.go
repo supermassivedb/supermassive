@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"strings"
 	"supermassive/instance/node"
+	"supermassive/instance/nodereplica"
 	"supermassive/network/client"
 	"supermassive/network/server"
 	"testing"
@@ -1352,5 +1353,293 @@ func TestServerCrudMultiplePrimaries(t *testing.T) {
 	nr.Close()
 	shard1.Close()
 	shard2.Close()
+
+}
+
+// We have 1 primary, 1 replica
+// We write data to primary, shutdown primary and check if replica has data
+func TestServerCrudPrimaryDownUseReplica(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	var shard *node.Node
+	var replica *nodereplica.NodeReplica
+
+	go func() {
+		config := &node.Config{
+			HealthCheckInterval: 2,
+			MaxMemoryThreshold:  75,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4010",
+				UseTLS:      false,
+				CertFile:    "",
+				KeyFile:     "",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+			ReadReplicas: []*client.Config{
+				{
+					ServerAddress:  "localhost:4011",
+					UseTLS:         false,
+					ConnectTimeout: 5,
+					WriteTimeout:   5,
+					ReadTimeout:    5,
+					MaxRetries:     3,
+					RetryWaitTime:  1,
+					BufferSize:     1024,
+				},
+			},
+		}
+
+		// We create temp shard directory
+		shard1Dir, err := ioutil.TempDir("", "shard")
+		if err != nil {
+			t.Fatalf("Failed to create temp directory: %v", err)
+		}
+
+		// Marshal yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write new config file for primary
+		err = os.WriteFile(fmt.Sprintf("%s/.node", shard1Dir), data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		shard, err = node.New(logger, "test-key")
+		if err != nil {
+			t.Fatalf("Failed to create node: %v", err)
+		}
+
+		shard.Config = config
+
+		err = shard.Open(&shard1Dir)
+		if err != nil {
+			t.Fatalf("Failed to open node: %v", err)
+		}
+
+	}()
+
+	// We start replica
+	go func() {
+		config := &nodereplica.Config{
+			MaxMemoryThreshold: 75,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4011",
+				UseTLS:      false,
+				CertFile:    "",
+				KeyFile:     "",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+		}
+
+		replicaDir, err := ioutil.TempDir("", "replica")
+		if err != nil {
+			t.Fatalf("Failed to create temp directory: %v", err)
+		}
+
+		// Marshal yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		err = os.WriteFile(fmt.Sprintf("%s/.nodereplica", replicaDir), data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		replica, err = nodereplica.New(logger, "test-key")
+		if err != nil {
+			t.Fatalf("Failed to create node: %v", err)
+		}
+
+		err = replica.Open(&replicaDir)
+		if err != nil {
+			t.Fatalf("Failed to open node: %v", err)
+		}
+
+	}()
+
+	time.Sleep(time.Second) // Wait for nodes to open
+
+	//We create a new cluster
+	nr, err := New(logger, "test-key", "test-user", "test-pass")
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	//We open cluster in background
+	go func() {
+		config := &Config{
+			HealthCheckInterval: 1,
+			ServerConfig: &server.Config{
+				Address:     "localhost:4012",
+				UseTLS:      false,
+				CertFile:    "/",
+				KeyFile:     "/",
+				ReadTimeout: 10,
+				BufferSize:  1024,
+			},
+			NodeConfigs: []*NodeConfig{
+				{
+					Node: &client.Config{
+						ServerAddress:  "localhost:4010",
+						UseTLS:         false,
+						ConnectTimeout: 5,
+						WriteTimeout:   5,
+						ReadTimeout:    5,
+						MaxRetries:     3,
+						RetryWaitTime:  1,
+						BufferSize:     1024,
+					},
+					Replicas: []*client.Config{
+						{
+							ServerAddress:  "localhost:4011",
+							UseTLS:         false,
+							ConnectTimeout: 5,
+							WriteTimeout:   5,
+							ReadTimeout:    5,
+							MaxRetries:     3,
+							RetryWaitTime:  1,
+							BufferSize:     1024,
+						},
+					},
+				},
+			},
+		}
+
+		// Marshal to yaml
+		data, err := yaml.Marshal(config)
+		if err != nil {
+			t.Fatalf("Failed to marshal config data: %v", err)
+		}
+
+		// Write to file
+		err = os.WriteFile(".cluster", data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		err = nr.Open()
+		if err != nil {
+			t.Fatalf("Failed to open cluster: %v", err)
+		}
+	}()
+
+	time.Sleep(4 * time.Second) // Wait for cluster to start and connect to primaries
+
+	defer os.Remove(".cluster")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", "localhost:4012")
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to resolve address: %v", err)
+	}
+
+	// Connect to the address with tcp
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to server: %v", err)
+	}
+
+	authStr := base64.StdEncoding.EncodeToString([]byte("test-user\\0test-pass"))
+
+	// We authenticate
+	_, err = conn.Write([]byte(fmt.Sprintf("AUTH %s\r\n", authStr)))
+	if err != nil {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Failed to authenticate: %v", err)
+	}
+
+	// We expect "OK authenticated" as response
+	buf := make([]byte, 1024)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		nr.Close()
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	if string(buf[:n]) != "OK authenticated\r\n" {
+		conn.Close()
+		nr.Close()
+		t.Fatalf("Expected 'OK authenticated', got %s", string(buf[:n]))
+	}
+
+	for i := 0; i < 10; i++ {
+		_, err = conn.Write([]byte(fmt.Sprintf("PUT hello%d world\r\n", i)))
+		if err != nil {
+			conn.Close()
+			shard.Close()
+			replica.Close()
+			nr.Close()
+			t.Fatalf("Failed to write: %v", err)
+		}
+
+		buf = make([]byte, 1024)
+
+		n, err = conn.Read(buf)
+		if err != nil {
+			conn.Close()
+			shard.Close()
+			replica.Close()
+			nr.Close()
+			t.Fatalf("Failed to read response: %v", err)
+		}
+
+		if !strings.HasPrefix(string(buf[:n]), "OK") {
+			conn.Close()
+			shard.Close()
+			replica.Close()
+			nr.Close()
+			t.Fatalf("Expected 'OK', got %s", string(buf[:n]))
+		}
+	}
+
+	nr.NodeConnectionsLock.Lock()
+	nr.NodeConnections[0].Health = false
+	nr.NodeConnections[0].Client.Close()
+	nr.NodeConnectionsLock.Unlock()
+
+	time.Sleep(time.Second * 2)
+
+	// We verify the data
+	for i := 0; i < 10; i++ {
+		_, err = conn.Write([]byte(fmt.Sprintf("GET hello%d\r\n", i)))
+		if err != nil {
+			conn.Close()
+			replica.Close()
+			nr.Close()
+			t.Fatalf("Failed to write: %v", err)
+		}
+
+		buf = make([]byte, 1024)
+
+		n, err = conn.Read(buf)
+		if err != nil {
+			conn.Close()
+			replica.Close()
+			nr.Close()
+			t.Fatalf("Failed to read response: %v", err)
+		}
+
+		if !strings.HasPrefix(string(buf[:n]), "OK") {
+			conn.Close()
+			replica.Close()
+			nr.Close()
+			t.Fatalf("Expected 'OK', got %s", string(buf[:n]))
+		}
+	}
+
+	conn.Close()
+
+	nr.Close()
+	shard.Close()
+	replica.Close()
 
 }

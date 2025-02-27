@@ -670,6 +670,7 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 			if err != nil {
 				_, err = conn.Write([]byte("ERR read error\r\n"))
 				if err != nil {
+					h.Cluster.NodeConnectionsLock.RUnlock()
 					h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 					return
 				}
@@ -677,13 +678,17 @@ func (h *ServerConnectionHandler) HandleConnection(conn net.Conn) {
 				if err != nil {
 					_, err = conn.Write([]byte("ERR write error\r\n"))
 					if err != nil {
+						h.Cluster.NodeConnectionsLock.RUnlock()
 						h.Cluster.Logger.Warn("write error", "error", err, "remote_addr", conn.RemoteAddr())
 						return
 					}
 				}
+				h.Cluster.NodeConnectionsLock.RUnlock()
 
 				continue
 			}
+
+			h.Cluster.NodeConnectionsLock.RUnlock()
 
 			_, err = conn.Write(response)
 			if err != nil {
