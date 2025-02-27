@@ -30,9 +30,11 @@ package hashtable
 
 import (
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestNew(t *testing.T) {
@@ -391,6 +393,130 @@ func TestGetWithRegexEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error with negative offset: %v", err)
 	}
+}
+
+func TestOneMillionRecords(t *testing.T) {
+	// Skip in short mode as this is a long-running test
+	if testing.Short() {
+		t.Skip("Skipping TestOneMillionRecords in short mode")
+	}
+
+	ht := NewWithOptions(1024*1024, 0.75, 0.25) // Start with 1M capacity
+
+	// Initialize random generator with seed for reproducibility
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	const recordCount = 1_000_000
+
+	// Create maps to keep track of what we put in the hash table
+	records := make(map[string]string, recordCount)
+
+	// Generate and insert 1 million random key-value pairs
+	t.Logf("Generating and inserting %d random records...", recordCount)
+	startTime := time.Now()
+
+	for i := 0; i < recordCount; i++ {
+		// Generate random key (ensure uniqueness for this test)
+		key := fmt.Sprintf("key-%d-%d", i, r.Intn(10000000))
+
+		// Generate random value
+		value := fmt.Sprintf("value-%d", r.Intn(10000000))
+
+		// Store in our verification map
+		records[key] = value
+
+		if !ht.Put(key, value) {
+			t.Fatalf("Failed to put key-value pair: %s -> %s", key, value)
+		}
+
+		// Print progress every 100,000 records
+		if (i+1)%100000 == 0 {
+			t.Logf("Inserted %d records so far...", i+1)
+		}
+	}
+
+	insertDuration := time.Since(startTime)
+	t.Logf("Finished inserting %d records in %v (%.2f records/sec)",
+		recordCount, insertDuration, float64(recordCount)/insertDuration.Seconds())
+
+	// Verify hash table stats
+	stats := ht.Stats()
+	t.Logf("Hash table stats: size=%s, used=%s, load_factor=%s",
+		stats["size"], stats["used"], stats["load_factor"])
+
+	// Verify all records can be retrieved
+	t.Logf("Verifying all %d records...", recordCount)
+	startTime = time.Now()
+
+	missingCount := 0
+	incorrectCount := 0
+
+	// Check each key-value pair
+	for key, expectedValue := range records {
+		value, _, exists := ht.Get(key)
+
+		if !exists {
+			missingCount++
+			if missingCount <= 10 {
+				t.Errorf("Key not found: %s", key)
+			}
+		} else if value != expectedValue {
+			incorrectCount++
+			if incorrectCount <= 10 {
+				t.Errorf("Value mismatch for key %s: expected %s, got %v",
+					key, expectedValue, value)
+			}
+		}
+
+		// Check progress every 100,000 records
+		if (len(records)-missingCount-incorrectCount)%100000 == 0 {
+			t.Logf("Verified %d records so far...", len(records)-missingCount-incorrectCount)
+		}
+	}
+
+	verifyDuration := time.Since(startTime)
+
+	// Report results..
+	if missingCount > 0 || incorrectCount > 0 {
+		t.Errorf("Verification failed: %d missing keys, %d incorrect values",
+			missingCount, incorrectCount)
+	} else {
+		t.Logf("All %d records verified successfully in %v (%.2f records/sec)",
+			recordCount, verifyDuration, float64(recordCount)/verifyDuration.Seconds())
+	}
+
+	// Test random access to the hash table
+	t.Logf("Testing random access to %d records...", recordCount)
+	startTime = time.Now()
+
+	// Select a subset of 100,000 random keys to access
+	randomAccessCount := 100_000
+	randomKeys := make([]string, 0, randomAccessCount)
+
+	// Convert keys to a slice for random access
+	allKeys := make([]string, 0, len(records))
+	for k := range records {
+		allKeys = append(allKeys, k)
+	}
+
+	// Select random keys
+	for i := 0; i < randomAccessCount; i++ {
+		idx := r.Intn(len(allKeys))
+		randomKeys = append(randomKeys, allKeys[idx])
+	}
+
+	// Time random access
+	startTime = time.Now()
+	for _, key := range randomKeys {
+		_, _, exists := ht.Get(key)
+		if !exists {
+			t.Errorf("Random access: key not found: %s", key)
+		}
+	}
+
+	randomAccessDuration := time.Since(startTime)
+	t.Logf("Random access to %d records completed in %v (%.2f records/sec)",
+		randomAccessCount, randomAccessDuration,
+		float64(randomAccessCount)/randomAccessDuration.Seconds())
 }
 
 func BenchmarkGetWithRegex(b *testing.B) {
