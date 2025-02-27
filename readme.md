@@ -28,11 +28,33 @@ Join the SuperMassive Discord server to chat with the maintainers and other user
 ## Benchmarks
 Local, 2 shards, no replicas. 32kb key and value size.
 ```bash
+`:+ssssssssssssssssss+:`           -------------------------------
+-+ssssssssssssssssssyyssss+-         OS: Ubuntu 23.04 x86_64
+.ossssssssssssssssssdMMMNysssso.       Kernel: 6.2.0-39-generic
+/ssssssssssshdmmNNmmyNMMMMhssssss/      Uptime: 2 days, 5 hours, 59 mins
++ssssssssshmydMMMMMMMNddddyssssssss+     Packages: 2755 (dpkg), 30 (snap)
+/sssssssshNMMMyhhyyyyhmNMMMNhssssssss/    Shell: bash 5.2.15
+.ssssssssdMMMNhsssssssssshNMMMdssssssss.   Resolution: 1080x1920, 1920x1080
++sssshhhyNMMNyssssssssssssyNMMMysssssss+   DE: GNOME 44.3
+ossyNMMMNyMMhsssssssssssssshmmmhssssssso   WM: Mutter
+ossyNMMMNyMMhsssssssssssssshmmmhssssssso   WM Theme: Adwaita
++sssshhhyNMMNyssssssssssssyNMMMysssssss+   Theme: Yaru [GTK2/3]
+.ssssssssdMMMNhsssssssssshNMMMdssssssss.   Icons: Yaru [GTK2/3]
+/sssssssshNMMMyhhyyyyhdNMMMNhssssssss/    Terminal: gnome-terminal
++sssssssssdmydMMMMMMMMddddyssssssss+     CPU: 11th Gen Intel i7-11700K (16) @ 4.900GH
+/ssssssssssshdmNNNNmyNMMMMhssssss/      GPU: AMD ATI Radeon RX 5500/5500M / Pro 5500
+.ossssssssssssssssssdMMMNysssso.       GPU: Intel RocketLake-S GT1 [UHD Graphics 75
+-+sssssssssssssssssyyyssss+-         GPU: NVIDIA GeForce GT 730
+`:+ssssssssssssssssss+:`           Memory: 10682MiB / 47928MiB
+.-/+oossssoo+/-.
+
+
 Total Operations: 1000000
 - GET operations: 799511
 - PUT operations: 150322
 - DEL operations: 50167
 Time Elapsed: 3.232200699s
+
 Operations/sec: 309386.73
 - GETs/sec: 247358.09
 - PUTs/sec: 46507.63
