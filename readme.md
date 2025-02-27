@@ -4,9 +4,6 @@
 
 SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tolerant, and self-healing key-value database.
 
-> [!IMPORTANT]
-> SuperMassive is in active beta development and is not ready for production use.
-
 ## Features
 
 - **Highly scalable** Scale horizontally with ease.  Simply add more nodes to the cluster.
@@ -27,6 +24,23 @@ SuperMassive is a massively scalable, in-memory, distributed, sharded, fault-tol
 Join the SuperMassive Discord server to chat with the maintainers and other users.  We are always looking for feedback, bugs and discussion.
 
 [![Discord](https://img.shields.io/discord/1343082076324495402?color=yellow&label=Discord&logo=discord&style=for-the-badge)](https://discord.gg/yfE5MV5w4d)
+
+## Benchmarks
+Local, 2 shards, no replicas. 32kb key and value size.
+```bash
+Total Operations: 1000000
+- GET operations: 799511
+- PUT operations: 150322
+- DEL operations: 50167
+Time Elapsed: 3.232200699s
+Operations/sec: 309386.73
+- GETs/sec: 247358.09
+- PUTs/sec: 46507.63
+- DELs/sec: 15521.00
+```
+
+You can benchmark yourself using benchmarking tool at [Benchmarker](https://github.com/supermassivedb/benchmarker)
+
 
 ## Getting Started
 
